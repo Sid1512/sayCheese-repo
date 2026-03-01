@@ -1,0 +1,16 @@
+# Dependencies
+node_modules/
+
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+serviceAccountKey.json
+*-service-account*.json
+
+# Logs & temp
+*.log
+.DS_Store
+
+# Uploads (local storage)
+uploads/

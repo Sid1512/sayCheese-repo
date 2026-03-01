@@ -153,8 +153,8 @@ Update profile or preferences. Send only fields being changed.
 - **Non-negotiables:** tops, pants, shoes.
 - **Optional:** thermals, jackets, scarves, hats, gloves, facemask, umbrella.
 
-Items are catalogued with: **warmth**, **breathability**, **waterproof**, **occasion tag**, **color**, **user comfort**.  
-Vision LLM is used to auto-detect and tag items from photos.
+Items are catalogued with: **description**, **warmth**, **breathability**, **waterproof**, **occasion tag**, **color**, **user comfort**.  
+Vision LLM is used to auto-detect and tag items from photos (including generating `description`).
 
 ### `GET /wardrobe`
 
@@ -178,6 +178,7 @@ Returns all wardrobe items for the authenticated user.
     {
       "item_id": "itm_001",
       "name": "Navy Merino Sweater",
+      "description": "Navy merino crew neck sweater, mid-weight, long sleeve",
       "category": "top",
       "image_url": "https://cdn.example.com/items/itm_001.jpg",
       "tags": {
@@ -218,6 +219,7 @@ Upload a photo of a clothing item. LLM auto-detects and tags it.
   "status": "complete",
   "detected_item": {
     "name": "Olive Waterproof Parka",
+    "description": "Olive green hooded parka, waterproof shell, mid-calf length",
     "category": "jacket",
     "image_url": "https://cdn.example.com/scans/scn_xyz789.jpg",
     "tags": {
@@ -246,6 +248,7 @@ Add an item (e.g. after confirming a scan result, or manual entry). Accepts same
 ```json
 {
   "name": "Olive Waterproof Parka",
+  "description": "Olive green hooded parka, waterproof shell, mid-calf length",
   "category": "jacket",
   "image_url": "https://cdn.example.com/scans/scn_xyz789.jpg",
   "tags": {
@@ -258,6 +261,10 @@ Add an item (e.g. after confirming a scan result, or manual entry). Accepts same
   }
 }
 ```
+
+| Field | Required | Notes |
+|-------|----------|-------|
+| `description` | No | Short text describing the item; can be auto-generated on scan or user-written. |
 
 **Response `201`** — Created item (same shape as list item).
 
@@ -280,12 +287,15 @@ Update name or tags. Send only fields to update.
 ```json
 {
   "name": "Olive Parka (hooded)",
+  "description": "Olive hooded parka, waterproof, mid-calf",
   "tags": {
     "warmth": 5,
     "user_comfort": 3
   }
 }
 ```
+
+Send only fields being updated. `description` is optional.
 
 **Response `200`** — Full updated item.
 
@@ -521,6 +531,7 @@ Items can be sorted by `times_worn` (e.g. ascending) to highlight underused piec
 |----------------------|---------|-------------|
 | `item_id`            | string  | Unique identifier |
 | `name`               | string  | Display name |
+| `description`        | string  | Short text describing the item (e.g. fabric, fit, style); from vision LLM on scan or user-editable |
 | `category`           | enum    | One of the categories above |
 | `image_url`          | string  | Hosted image URL |
 | `times_worn`         | int     | Lifetime wear count |
