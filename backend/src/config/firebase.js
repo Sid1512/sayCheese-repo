@@ -27,12 +27,17 @@ function initializeFirebase() {
       );
     }
     const serviceAccount = require(resolvedPath);
+    const storageBucket =
+      process.env.FIREBASE_STORAGE_BUCKET || `${projectId}.appspot.com`;
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount),
       projectId,
+      storageBucket,
     });
   } else {
-    admin.initializeApp({ projectId });
+    const storageBucket =
+      process.env.FIREBASE_STORAGE_BUCKET || `${projectId}.appspot.com`;
+    admin.initializeApp({ projectId, storageBucket });
   }
 
   initialized = true;

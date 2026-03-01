@@ -192,11 +192,14 @@ Returns all wardrobe items for the authenticated user.
       "times_worn_last_7_days": 6,
       "times_worn_last_30_days": 6,
       "last_worn_date": "2026-02-24",
-      "added_at": "2026-01-10T09:00:00Z"
+      "added_at": "2026-01-10T09:00:00Z",
+      "confidence": 0.92
     }
   ]
 }
 ```
+
+`confidence` is optional (0–1); set when the item was created from a scan (vision LLM), null or omitted for manual entry.
 
 ---
 
@@ -258,13 +261,15 @@ Add an item (e.g. after confirming a scan result, or manual entry). Accepts same
     "occasion": ["casual", "outdoor"],
     "color": "olive",
     "user_comfort": 4
-  }
+  },
+  "confidence": 0.92
 }
 ```
 
 | Field | Required | Notes |
 |-------|----------|-------|
 | `description` | No | Short text describing the item; can be auto-generated on scan or user-written. |
+| `confidence` | No | 0–1; from vision LLM when adding from scan. Omit for manual entry. |
 
 **Response `201`** — Created item (same shape as list item).
 
@@ -384,9 +389,50 @@ Returns ~2 options per fixed category (top, bottom, footwear) and from optional 
 Supports **activity-based customisation** and **mood** (enclothed cognition).  
 **Health angles:** thermal safety, UV protection, activity-matched breathability.
 
+**Location (weather):** Latitude and longitude are **provided by the client (frontend)**. The frontend should obtain them from the browser Geolocation API, the user’s saved profile (e.g. `GET /user/profile`), or user-entered address. When location is sent, the API fetches weather and applies weather-based pre-filtering and includes weather in the response; when omitted, recommendations run without weather.
+
+---
+
+### `GET /recommendations/candidates`
+
+Pre-filtered candidate items per slot (for UI or before calling `POST /recommendations`). Uses category, occasion, recency, and (when location is provided) weather-based warmth and rain filters.
+
+**Query parameters**
+
+| Param             | Type   | Required | Notes |
+|-------------------|--------|----------|--------|
+| `activity`        | string | No       | e.g. `work`, `gym`, `casual`, `outdoor`, `formal` |
+| `date`            | string | No       | `YYYY-MM-DD`; default today |
+| `limit_per_slot`  | number | No       | Max items per slot (default 15, max 50) |
+| `lat`             | number | No       | **From frontend:** latitude for weather (e.g. Geolocation or profile) |
+| `lon`             | number | No       | **From frontend:** longitude for weather |
+
+When `lat` and `lon` are both present and valid, the API fetches weather and applies warmth/rain pre-filtering and returns `weather` in the response. Omit for no weather.
+
+**Response `200`**
+
+```json
+{
+  "date": "2026-02-28",
+  "activity": "casual",
+  "candidates": {
+    "top": [ { "item_id": "itm_001", "name": "...", "description": "...", "category": "top", "tags": {}, "last_worn_date": null } ],
+    "bottom": [],
+    "footwear": [],
+    "optional": []
+  },
+  "counts": { "top": 5, "bottom": 8, "footwear": 3, "optional": 2 },
+  "weather": { "temperature_c": 7, "feels_like_c": 4, "condition": "rainy", "rain_probability": 0.85, "uv_index": 2, "humidity": 82, "wind_kph": 22 }
+}
+```
+
+`weather` is only present when the request included `lat` and `lon`.
+
+---
+
 ### `POST /recommendations`
 
-Generate a daily outfit recommendation.
+Generate a daily outfit recommendation (pre-filter + LLM selection).
 
 **Request**
 
@@ -407,7 +453,7 @@ Generate a daily outfit recommendation.
 | `date`     | No       | Defaults to today                                                     |
 | `activity` | No       | e.g. `work`, `gym`, `casual`, `outdoor`, `formal` — adjusts occasion and breathability |
 | `mood`     | No       | `confident`, `relaxed`, `energised` — “how do you want to feel today?” |
-| `location` | No       | Falls back to user profile location for weather                       |
+| `location` | No       | **From frontend:** `{ "lat": number, "lon": number }` for weather (e.g. Geolocation API or profile). When present, weather is fetched and used; when omitted, no weather. May fall back to user profile location if available. |
 
 **Response `200`**
 
@@ -543,6 +589,7 @@ Items can be sorted by `times_worn` (e.g. ascending) to highlight underused piec
 | `tags.occasion`      | string[]| e.g. `casual`, `work`, `formal`, `outdoor`, `athletic`, `smart_casual` |
 | `tags.color`         | string  | Primary color label |
 | `tags.user_comfort`  | int 1–5 | How comfortable the user finds this item |
+| `confidence`         | float 0–1 \| null | Vision LLM confidence when item was created from scan; null for manual entry |
 
 ### Activity (examples)
 

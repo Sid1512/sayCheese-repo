@@ -28,16 +28,14 @@ No API keys required.
 
 ## 2. Pre-filter vs LLM: Two-Stage Filtering
 
-We **cannot** implement full weather-based logic (temperature bands, rain, UV, visibility, AQI, pollen, wind nuance) using only database fields. Those require combining weather context with item attributes in a single step. So filtering is split into:
-
-- **Stage 1 — Database pre-filter:** Use only data stored in the DB to narrow the candidate set (category, occasion vs activity, wear recency). Keeps the list small and relevant.
-- **Stage 2 — LLM filtering:** The model receives weather + environment + mood + the pre-filtered list, and applies all weather-based, health, and mood-based logic to pick items and write explanations.
+- **Stage 1 — Database pre-filter:** We **fetch weather first** (Open-Meteo) when location (lat/lon) is provided. Then we narrow the candidate set using: **category**, **occasion vs activity**, **wear recency**, and (using the fetched weather) **warmth** and **rain/waterproof** rules. The same weather object is returned with the candidates so the LLM can use it without a second API call.
+- **Stage 2 — LLM filtering:** The model receives the **already-fetched weather** + environment + mood + the pre-filtered list, and applies remaining weather nuance (UV, visibility, wind, AQI, pollen), health insights, and mood-based choice and explanations.
 
 ---
 
-## 3. Stage 1: Database Pre-filter (Basic Filtering)
+## 3. Stage 1: Database Pre-filter (with weather-based warmth and rain)
 
-Uses **only** fields we have in the database. No interpretation of temperature, rain, or other live weather — that is left to the LLM.
+When the recommendation flow is run with a location (lat/lon), we call the **weather API once**, then apply all filters below. When no location is provided, we skip weather and apply only category, occasion, and recency.
 
 ### 3.1 Category (required slots)
 
@@ -65,16 +63,32 @@ Uses **only** fields we have in the database. No interpretation of temperature, 
 
 - We have `last_worn_date` (and optionally `times_worn_last_7_days`) in the DB.
 - **Exclude** items where `last_worn_date` is within the last **2 days** (configurable window). So if today is 2026-02-28, exclude items with `last_worn_date` in [2026-02-26, 2026-02-27, 2026-02-28].
-- **Optional soft rule:** Down-rank (but do not exclude) items worn in the last 5–7 days, e.g. by sorting so “not worn in 7 days” appear first. Implementation: sort candidates by `last_worn_date` ascending (null or oldest first), so less recently worn items are preferred when we pass a limited list to the LLM.
+- **Sort** candidates by `last_worn_date` ascending (null or oldest first), so less recently worn items are preferred when we pass a limited list to the LLM.
 
-### 3.4 What we do *not* do in the database pre-filter
+### 3.4 Warmth (weather-based, when weather is available)
 
-- No temperature or feels-like bands (we don’t filter by `tags.warmth` using weather in the DB layer).
-- No rain/waterproof rules (we don’t exclude non-waterproof items here).
-- No UV, visibility, AQI, pollen, or wind rules.
-- No scoring by “boost” from weather — that is all LLM.
+- We use **feels_like** (apparent temperature) from the weather API.
+- **Cold (feels_like &lt; 10°C):** Include only items where `tags.warmth >= 3` (mid to very warm). Exclude very light layers.
+- **Hot (feels_like &gt; 25°C):** Include only items where `tags.warmth <= 2` **and** `tags.breathability >= 3`. Exclude heavy or non-breathable items.
+- **Mild (10–25°C):** No warmth filter; all items pass.
 
-**Output of Stage 1:** Per-slot lists of item IDs (and full item objects, including `name`, `category`, `tags`, `description`, `last_worn_date`, etc.) that the LLM will choose from. Cap list size per slot (e.g. top 10–15) so the prompt stays manageable.
+Thresholds are configurable (e.g. 10°C and 25°C) in the backend. If weather was not fetched (no lat/lon), this step is skipped.
+
+### 3.5 Rain / waterproof (weather-based, when weather is available)
+
+- We use **weather_code** (WMO) and **precipitation_probability** from the weather API. Rain is “significant” when the condition is rain/snow (e.g. WMO codes 61–67, 71–77, 80–82) or when max hourly precipitation probability ≥ 50%.
+- **Footwear:** When rain is significant, include only items where `tags.waterproof === true`. If that yields zero items, **drop the filter** and keep all footwear (LLM can still prefer waterproof in Stage 2).
+- **Jacket and umbrella (in optional list):** When rain is significant, include only jacket/umbrella items where `tags.waterproof === true`. If that yields zero optional items, drop the filter for optionals.
+- **Top and bottom:** No rain filter in Stage 1 (LLM handles underlayers).
+
+If weather was not fetched, this step is skipped.
+
+### 3.6 What we do *not* do in the database pre-filter
+
+- No UV, visibility, AQI, pollen, or wind rules — those are LLM-only.
+- No scoring by “boost” from weather beyond the include/exclude rules above.
+
+**Output of Stage 1:** Per-slot lists of full item objects (including `name`, `category`, `tags`, `description`, `last_worn_date`, etc.) and the **weather object** (temperature, feels_like, condition, rain_probability, etc.) so the LLM receives the same weather without a second API call. Cap list size per slot (e.g. top 10–15).
 
 ---
 
@@ -133,7 +147,8 @@ The LLM is responsible for:
 
 | Layer | What we use | Who does it |
 |-------|-------------|-------------|
-| **Database pre-filter** | Category, `tags.occasion` vs activity, `last_worn_date` (exclude last 2 days; optionally sort by recency) | Backend (queries + light logic) |
-| **LLM filtering** | Temperature/feels-like, rain, wind, UV, visibility, AQI, pollen, **mood** | LLM (prompt + model) |
+| **Weather fetch** | Open-Meteo (once per request when lat/lon provided) | Backend (weather service) |
+| **Database pre-filter** | Category, `tags.occasion` vs activity, `last_worn_date` (exclude last 2 days; sort by recency), **warmth** (feels_like vs `tags.warmth`/`tags.breathability`), **rain** (waterproof for footwear and jacket/umbrella when rainy) | Backend (prefilter service) |
+| **LLM filtering** | Same weather + pre-filtered list; remaining nuance (wind, UV, visibility, AQI, pollen), health insights, **mood** | LLM (prompt + model) |
 
-The database only does basic, deterministic filtering so the LLM gets a manageable, relevant shortlist. All weather-based, health, and mood-based decisions and explanations are done by the LLM.
+Weather is fetched once; the same object is used for the pre-filter and passed through to the LLM. Warmth and rain are applied in the DB pre-filter when weather is available; the LLM still refines choices and writes explanations.

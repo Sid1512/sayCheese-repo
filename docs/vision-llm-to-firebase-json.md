@@ -119,6 +119,7 @@ When the user confirms (or adds manually), we write a **wardrobe item**. This is
 | `timesWornLast30Days` | number | Integer. |
 | `lastWornDate` | string \| null | ISO date `YYYY-MM-DD` or null. |
 | `addedAt` | timestamp | Set on create. |
+| `confidence` | number \| null | 0–1; from vision LLM when item was created from scan; null for manual entry. |
 
 **`tags` map (same structure in Firestore):**
 
@@ -153,7 +154,8 @@ When the user confirms (or adds manually), we write a **wardrobe item**. This is
   "timesWornLast7Days": 0,
   "timesWornLast30Days": 0,
   "lastWornDate": null,
-  "addedAt": "2026-01-10T09:00:00Z"
+  "addedAt": "2026-01-10T09:00:00Z",
+  "confidence": 0.92
 }
 ```
 
