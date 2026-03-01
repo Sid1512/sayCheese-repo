@@ -10,6 +10,7 @@ export default function Profile() {
   const [insights, setInsights] = useState(null);
   const [insightsPeriod, setInsightsPeriod] = useState("month");
   const [insightsLoading, setInsightsLoading] = useState(false);
+  const [insightsError, setInsightsError] = useState("");
 
   const text = isDark ? "text-white" : "text-gray-900";
   const textMuted = isDark ? "text-white/60" : "text-gray-500";
@@ -22,11 +23,14 @@ export default function Profile() {
 
   async function loadInsights(period) {
     setInsightsLoading(true);
+    setInsightsError("");
     try {
       const data = await getWardrobeUtilization(period);
       setInsights(data);
     } catch (err) {
       console.error(err);
+      setInsights(null);
+      setInsightsError(err?.message || "Failed to load insights.");
     } finally {
       setInsightsLoading(false);
     }
@@ -134,6 +138,12 @@ export default function Profile() {
           <div className={`${card} border rounded-3xl p-8 text-center`}>
             <div className="text-4xl mb-3 animate-bounce">📊</div>
             <p className={`${text} font-medium`}>Loading insights...</p>
+          </div>
+        )}
+
+        {!insightsLoading && insightsError && (
+          <div className={`${card} border rounded-2xl p-4`}>
+            <p className="text-red-400 text-sm font-medium">{insightsError}</p>
           </div>
         )}
 

@@ -283,16 +283,32 @@ export default function Home() {
         selectedOutfit.footwear?.item_id || selectedOutfit.footwear?.id,
         ...optionalItems.map((o) => o?.item_id || o?.id),
       ].filter(Boolean);
+      const uniqueItemIds = [...new Set(itemIds.map((id) => String(id).trim()).filter(Boolean))];
+      if (uniqueItemIds.length === 0) {
+        setFeedback({
+          type: "error",
+          message: "Select at least one outfit item before logging.",
+        });
+        return;
+      }
 
-      await logWear({
+      const result = await logWear({
         activity: occasion,
-        item_ids: itemIds,
+        item_ids: uniqueItemIds,
         currentTime: weather?.current?.time,
         timezone: weather?.timezone,
       });
       setWearLogged(true);
+      setFeedback({
+        type: "success",
+        message: `Outfit logged (${result?.items_logged || uniqueItemIds.length} items).`,
+      });
     } catch (err) {
       console.error("Failed to log wear:", err);
+      setFeedback({
+        type: "error",
+        message: err?.message || "Failed to log outfit. Try again.",
+      });
     }
   }
 
@@ -729,11 +745,39 @@ export default function Home() {
                 >
                   ✅ Log Today's Outfit
                 </button>
+                {feedback?.message && (
+                  <p
+                    className={`mt-3 text-xs text-center ${
+                      feedback.type === "error"
+                        ? "text-red-400"
+                        : isDark
+                        ? "text-emerald-300"
+                        : "text-emerald-700"
+                    }`}
+                  >
+                    {feedback.message}
+                  </p>
+                )}
               </div>
             ) : (
-              <p className={`${text} text-sm text-center`}>
-                Outfit logged! 👗 Your wardrobe stats are updated.
-              </p>
+              <div>
+                <p className={`${text} text-sm text-center`}>
+                  Outfit logged! 👗 Your wardrobe stats are updated.
+                </p>
+                {feedback?.message && (
+                  <p
+                    className={`mt-2 text-xs text-center ${
+                      feedback.type === "error"
+                        ? "text-red-400"
+                        : isDark
+                        ? "text-emerald-300"
+                        : "text-emerald-700"
+                    }`}
+                  >
+                    {feedback.message}
+                  </p>
+                )}
+              </div>
             )}
           </div>
         </div>
