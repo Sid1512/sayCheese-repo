@@ -5,15 +5,20 @@ export async function getWeather(lat, lon) {
   return data;
 }
 
-export async function getAirQuality(lat, lon) {
+export async function getAirQuality(lat, lon, currentTime) {
   try {
     const url = `https://air-quality.api.open-meteo.com/v1/air-quality?latitude=${lat}&longitude=${lon}&hourly=us_aqi,pollen_grass,pollen_tree,pollen_weed&timezone=auto&forecast_days=1`;
     const res = await fetch(url);
     const data = await res.json();
 
     const hourlyTime = Array.isArray(data?.hourly?.time) ? data.hourly.time : [];
-    const currentHour = new Date().toISOString().slice(0, 13);
-    let idx = hourlyTime.findIndex((t) => String(t).slice(0, 13) === currentHour);
+    // Use the location's current time from the weather response (e.g. "2026-03-01T14:30")
+    // which is already in the location's local timezone — same as the AQI hourly times.
+    // Fallback to device UTC only if not available (will be off in non-UTC timezones).
+    const localHour = currentTime
+      ? String(currentTime).slice(0, 13)
+      : new Date().toISOString().slice(0, 13);
+    let idx = hourlyTime.findIndex((t) => String(t).slice(0, 13) === localHour);
     if (idx < 0) idx = 0;
     const pick = (arr) => (Array.isArray(arr) && arr.length > idx ? arr[idx] : null);
     return {

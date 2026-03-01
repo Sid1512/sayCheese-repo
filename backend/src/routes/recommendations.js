@@ -78,6 +78,8 @@ router.get('/candidates', authMiddleware, async (req, res) => {
     });
 
     const payload = {
+      // date is provided by the client (from locationDate()) and is already timezone-correct.
+      // Server UTC fallback is only used if the client omits it.
       date: date || new Date().toISOString().slice(0, 10),
       activity: activity || null,
       candidates: {
@@ -119,6 +121,8 @@ router.post('/', authMiddleware, async (req, res) => {
     const userId = req.userId;
     const body = req.body || {};
     const date = body.date ? String(body.date).trim().slice(0, 10) : '';
+    // Prefer the client-provided date (from locationDate() in the frontend) which is already
+    // correct for the user's location timezone. Fall back to server UTC only as last resort.
     const dateOpt = /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : new Date().toISOString().slice(0, 10);
     const activity = body.activity ? String(body.activity).trim() : undefined;
     const mood = body.mood ? String(body.mood).trim() : undefined;

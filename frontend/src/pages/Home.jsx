@@ -5,7 +5,6 @@ import { getWeatherDescription, locationDate } from "../services/weather";
 import { getRecommendation } from "../services/recommendations";
 import { logWear } from "../services/wearLog";
 import { useTheme } from "../App";
-import { RadarChart, PolarGrid, PolarAngleAxis, Radar, ResponsiveContainer } from "recharts";
 
 const OCCASIONS = ["casual", "work", "formal", "gym", "outdoor", "outdoor_brunch"];
 const MOODS = [
@@ -163,14 +162,25 @@ export default function Home() {
     }
   }, [occasion, mood]);
 
+  // Track which recommendation_id we last applied so we can tell when a fresh one arrives.
+  const [appliedRecId, setAppliedRecId] = useState(null);
+
   useEffect(() => {
     if (!recommendation?.outfit) return;
+    const recId = recommendation.recommendation_id ?? null;
+    const isNewRec = recId !== appliedRecId;
+
     setSelectedOutfit((prev) => ({
-      top: clearedSlots.top ? null : (prev.top || recommendation.outfit.top || null),
-      bottom: clearedSlots.bottom ? null : (prev.bottom || recommendation.outfit.bottom || null),
-      footwear: clearedSlots.footwear ? null : (prev.footwear || recommendation.outfit.footwear || null),
-      optional: prev.optional !== null ? prev.optional : (recommendation.outfit.optional || []),
+      // If this is a brand-new recommendation (occasion/mood changed), always write its slots
+      // so stale items from the previous recommendation are never shown.
+      // If only clearedSlots changed (user toggling a slot), preserve their manual picks.
+      top: clearedSlots.top ? null : (isNewRec ? recommendation.outfit.top || null : prev.top || recommendation.outfit.top || null),
+      bottom: clearedSlots.bottom ? null : (isNewRec ? recommendation.outfit.bottom || null : prev.bottom || recommendation.outfit.bottom || null),
+      footwear: clearedSlots.footwear ? null : (isNewRec ? recommendation.outfit.footwear || null : prev.footwear || recommendation.outfit.footwear || null),
+      optional: isNewRec ? (recommendation.outfit.optional || []) : (prev.optional !== null ? prev.optional : (recommendation.outfit.optional || [])),
     }));
+
+    if (isNewRec) setAppliedRecId(recId);
   }, [recommendation, clearedSlots]);
 
   useEffect(() => {
@@ -548,8 +558,10 @@ export default function Home() {
               key={o}
               onClick={() => {
                 setOccasion(o);
+                setRecommendation(null);
                 setSelectedOutfit({ top: null, bottom: null, footwear: null, optional: null });
                 setClearedSlots({ top: false, bottom: false, footwear: false });
+                setWearLogged(false);
               }}
               className={`px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
                 occasion === o ? pill : pillInactive
@@ -570,8 +582,10 @@ export default function Home() {
               key={m.value}
               onClick={() => {
                 setMood(m.value);
+                setRecommendation(null);
                 setSelectedOutfit({ top: null, bottom: null, footwear: null, optional: null });
                 setClearedSlots({ top: false, bottom: false, footwear: false });
+                setWearLogged(false);
               }}
               className={`py-3 rounded-2xl border text-sm font-medium transition-all flex flex-col items-center gap-1 ${
                 mood === m.value ? pill : pillInactive

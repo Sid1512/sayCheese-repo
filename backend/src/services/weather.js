@@ -23,7 +23,7 @@ async function getWeatherForRecommendation(lat, lon) {
   const url = new URL(BASE);
   url.searchParams.set('latitude', lat);
   url.searchParams.set('longitude', lon);
-  url.searchParams.set('current', 'temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,precipitation');
+  url.searchParams.set('current', 'temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,precipitation,wind_speed_10m');
   url.searchParams.set('hourly', 'precipitation_probability');
   url.searchParams.set('daily', 'uv_index_max');
   url.searchParams.set('timezone', 'auto');

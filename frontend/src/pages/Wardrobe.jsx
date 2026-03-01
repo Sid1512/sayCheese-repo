@@ -243,7 +243,7 @@ export default function Wardrobe() {
                         </span>
                       )}
                       <span className={`${textFaint} text-xs`}>
-                        {item.times_worn ?? 0}x worn
+                        {item.times_worn_last_30_days ?? item.times_worn ?? 0}x worn
                       </span>
                     </div>
                   </button>

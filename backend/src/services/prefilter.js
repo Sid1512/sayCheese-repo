@@ -1,8 +1,9 @@
 /**
  * Database pre-filter for recommendations (Stage 1).
- * Uses: category, tags.occasion vs activity (preference sort), tags.waterproof (preference sort when rainy),
- * and last_worn_date (preference sort). All affect ordering only—no items are removed.
- * Warmth filtering removed (LLM handles it). See docs/weather-and-data-sources.md §3.
+ * Uses: category, recency exclusion (hard filter — items worn within last N days are removed,
+ * with fallback to all items if a slot would be emptied), tags.occasion vs activity (preference sort),
+ * and tags.waterproof (preference sort when rainy). Warmth filtering handled by LLM (Stage 2).
+ * See docs/weather-and-data-sources.md §3.
  */
 
 const { getAdmin } = require('../config/firebase');
@@ -169,7 +170,10 @@ function sortByOccasionRecencyAndRainPreference(docs, allowedOccasions, limit, o
 }
 
 /**
- * Fetch one non-negotiable slot: userId + category, then sort by occasion+rain+recency preference (no items removed).
+ * Fetch one non-negotiable slot: userId + category, apply recency exclusion (hard filter),
+ * then sort by occasion+rain+recency preference.
+ * Recency exclusion: items worn on or after cutoffDate are removed. If that empties the slot,
+ * the filter is dropped and all items are used so the LLM always has something to work with.
  * @param {string} userId
  * @param {string} category - top | bottom | footwear
  * @param {object} opts - { occasionFilter, cutoffDate, limitPerSlot, weather }
@@ -186,8 +190,30 @@ async function getSlotCandidates(userId, category, opts) {
 
   if (DEBUG) console.log(`[prefilter] slot=${category} DB query: userId + category=${category} → ${docs.length} docs`);
 
-  // Occasion, rain, recency: preference-based sort only (no items removed).
-  const sorted = sortByOccasionRecencyAndRainPreference(docs, occasionFilter, limitPerSlot, {
+  // Recency exclusion: remove items worn within the last N days (lastWornDate >= cutoffDate).
+  // If all items are excluded, drop the filter so the LLM still receives candidates.
+  let recencyFiltered = docs;
+  if (cutoffDate) {
+    const excluded = docs.filter((d) => {
+      const worn = toDateStr(d.data.lastWornDate);
+      return worn != null && worn >= cutoffDate;
+    });
+    const afterExclusion = docs.filter((d) => {
+      const worn = toDateStr(d.data.lastWornDate);
+      return worn == null || worn < cutoffDate;
+    });
+    if (afterExclusion.length > 0) {
+      recencyFiltered = afterExclusion;
+      if (DEBUG && excluded.length > 0) {
+        console.log(`[prefilter] slot=${category} recency exclusion: removed ${excluded.length} worn on/after ${cutoffDate} → ${recencyFiltered.length} remain`);
+      }
+    } else if (DEBUG && excluded.length > 0) {
+      console.log(`[prefilter] slot=${category} recency exclusion: all ${docs.length} items worn recently — dropping filter to preserve candidates`);
+    }
+  }
+
+  // Occasion, rain, recency: preference-based sort (no further removal).
+  const sorted = sortByOccasionRecencyAndRainPreference(recencyFiltered, occasionFilter, limitPerSlot, {
     weather,
     slotCategory: category,
   });
@@ -197,7 +223,7 @@ async function getSlotCandidates(userId, category, opts) {
       ? 'prefer waterproof'
       : 'none';
     console.log(
-      `[prefilter] slot=${category} occasion+rain+recency: ${occLabel}, rain=${rainLabel} (preference sort, no removal) → ${docs.length} → ${sorted.length}`
+      `[prefilter] slot=${category} occasion+rain+recency sort: ${occLabel}, rain=${rainLabel} → ${recencyFiltered.length} → ${sorted.length}`
     );
   }
   return mapDocsToApiItems(sorted, category);
@@ -251,7 +277,8 @@ function mapDocsToApiItems(docs, slotLabel) {
 }
 
 /**
- * Fetch optional categories (thermal, jacket, etc.) in one query, then sort by occasion+rain+recency preference (no items removed).
+ * Fetch optional categories (thermal, jacket, etc.) in one query, apply recency exclusion,
+ * then sort by occasion+rain+recency preference.
  * @param {string} userId
  * @param {object} opts - { occasionFilter, cutoffDate, limitPerSlot, weather }
  * @returns {Promise<Array<object>>} API-shaped items for LLM
@@ -267,8 +294,26 @@ async function getOptionalCandidates(userId, opts) {
 
   if (DEBUG) console.log(`[prefilter] slot=optional DB query: userId + category in [${OPTIONAL_CATEGORIES.join(', ')}] → ${docs.length} docs`);
 
-  // Occasion, rain, recency: preference-based sort only (no items removed).
-  const sorted = sortByOccasionRecencyAndRainPreference(docs, occasionFilter, limitPerSlot, {
+  // Recency exclusion: remove items worn within the last N days.
+  // If all items are excluded, drop the filter so optional layer suggestions still work.
+  let recencyFiltered = docs;
+  if (cutoffDate) {
+    const afterExclusion = docs.filter((d) => {
+      const worn = toDateStr(d.data.lastWornDate);
+      return worn == null || worn < cutoffDate;
+    });
+    if (afterExclusion.length > 0) {
+      if (DEBUG && afterExclusion.length < docs.length) {
+        console.log(`[prefilter] slot=optional recency exclusion: removed ${docs.length - afterExclusion.length} worn on/after ${cutoffDate} → ${afterExclusion.length} remain`);
+      }
+      recencyFiltered = afterExclusion;
+    } else if (DEBUG && docs.length > 0) {
+      console.log(`[prefilter] slot=optional recency exclusion: all ${docs.length} items worn recently — dropping filter`);
+    }
+  }
+
+  // Occasion, rain, recency: preference-based sort only (no further removal).
+  const sorted = sortByOccasionRecencyAndRainPreference(recencyFiltered, occasionFilter, limitPerSlot, {
     weather,
     slotCategory: 'optional',
   });
@@ -278,7 +323,7 @@ async function getOptionalCandidates(userId, opts) {
       ? 'prefer waterproof (jacket/umbrella)'
       : 'none';
     console.log(
-      `[prefilter] slot=optional occasion+rain+recency: ${occLabel}, rain=${rainLabel} (preference sort, no removal) → ${docs.length} → ${sorted.length}`
+      `[prefilter] slot=optional occasion+rain+recency sort: ${occLabel}, rain=${rainLabel} → ${recencyFiltered.length} → ${sorted.length}`
     );
   }
   return mapDocsToApiItems(sorted, 'optional');
@@ -313,7 +358,8 @@ async function getPreFilteredCandidates(userId, options = {}) {
 
   if (DEBUG) {
     const filtersApplied = [
-      `occasion+rain+recency: preference sort only (no removal), limit_per_slot=${limitPerSlot}`,
+      `recency exclusion: items worn on/after ${cutoffDate} removed (last ${excludeLastNDays} days); fallback to all items if slot would be empty`,
+      `occasion+rain sort: preference-based, limit_per_slot=${limitPerSlot}`,
       occasionFilter
         ? `occasion: prefer tags [${occasionFilter.join(', ')}]`
         : 'occasion: none (any)',

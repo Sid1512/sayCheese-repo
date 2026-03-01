@@ -50,21 +50,24 @@ export function AppProvider({ children }) {
     }
   }
 
+  async function fetchWeatherForCoords(lat, lon) {
+    // Fetch weather first so we have current.time in the location's timezone,
+    // then pass it to getAirQuality so it matches the correct hourly AQI slot.
+    const weatherData = await getWeather(lat, lon);
+    const currentTime = weatherData?.current?.time ?? null;
+    const [environmental, name] = await Promise.all([
+      getAirQuality(lat, lon, currentTime),
+      reverseGeocode(lat, lon),
+    ]);
+    return { weatherData, environmental, name };
+  }
+
   async function fetchWeather() {
     try {
       const loc = await getUserLocation();
       setLocation(loc);
-      const fallbackLat = loc.lat;
-      const fallbackLon = loc.lon;
-      const [weatherData, environmental, name] = await Promise.all([
-        getWeather(fallbackLat, fallbackLon),
-        getAirQuality(fallbackLat, fallbackLon),
-        reverseGeocode(fallbackLat, fallbackLon),
-      ]);
-      setWeather({
-        ...weatherData,
-        environmental,
-      });
+      const { weatherData, environmental, name } = await fetchWeatherForCoords(loc.lat, loc.lon);
+      setWeather({ ...weatherData, environmental });
       setLocationName(name);
     } catch (_err) {
       // // 🔥 VERY HOT
@@ -91,15 +94,8 @@ export function AppProvider({ children }) {
       // // 🌫️ FOGGY
       // const [fallbackLat, fallbackLon] = [37.7749, -122.4194];
 
-      const [data, environmental, name] = await Promise.all([
-        getWeather(fallbackLat, fallbackLon),
-        getAirQuality(fallbackLat, fallbackLon),
-        reverseGeocode(fallbackLat, fallbackLon),
-      ]);
-      setWeather({
-        ...data,
-        environmental,
-      });
+      const { weatherData, environmental, name } = await fetchWeatherForCoords(fallbackLat, fallbackLon);
+      setWeather({ ...weatherData, environmental });
       setLocationName(name);
       setLocation({ lat: fallbackLat, lon: fallbackLon });
     }
