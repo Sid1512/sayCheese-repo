@@ -397,12 +397,39 @@ export default function Home() {
     ...weatherHealthInsights,
   ];
 
+  const wardrobeById = useMemo(() => {
+    const map = new Map();
+    for (const item of wardrobe || []) {
+      const id = String(item?.item_id || item?.id || "");
+      if (id) map.set(id, item);
+    }
+    return map;
+  }, [wardrobe]);
+
+  function resolveOutfitItem(item) {
+    if (!item) return null;
+    const id = String(item?.item_id || item?.id || "");
+    if (!id) return item;
+    const full = wardrobeById.get(id);
+    if (!full) return item;
+    return {
+      ...full,
+      ...item,
+      item_id: id,
+      id,
+    };
+  }
+
+  function getItemImage(item) {
+    return item?.image_url || item?.imageUrl || null;
+  }
+
   const outfitSlots = recommendation?.outfit
     ? [
-        { key: "top", label: "Top", item: selectedOutfit.top || recommendation.outfit.top },
-        { key: "bottom", label: "Bottom", item: selectedOutfit.bottom || recommendation.outfit.bottom },
-        { key: "footwear", label: "Footwear", item: selectedOutfit.footwear || recommendation.outfit.footwear },
-      ]
+        { key: "top", label: "Top", item: resolveOutfitItem(selectedOutfit.top || recommendation.outfit.top) },
+        { key: "bottom", label: "Bottom", item: resolveOutfitItem(selectedOutfit.bottom || recommendation.outfit.bottom) },
+        { key: "footwear", label: "Footwear", item: resolveOutfitItem(selectedOutfit.footwear || recommendation.outfit.footwear) },
+      ].filter((s) => s.item)
     : [];
   const visibleOutfitSlots = outfitSlots.filter((slot) => !clearedSlots[slot.key]);
 
@@ -423,11 +450,6 @@ export default function Home() {
   function openWardrobePicker(slot) {
     navigate(`/wardrobe?pick=${slot}&returnTo=%2F`);
   }
-
-  const skinColor =
-    user?.preferences?.skinTone === "Light" ? "#FDDBB4" :
-    user?.preferences?.skinTone === "Medium" ? "#D4A574" :
-    user?.preferences?.skinTone === "Tan" ? "#C68642" : "#8D5524";
 
   return (
     <div className="min-h-screen pb-24 px-4 pt-6 max-w-md mx-auto">
@@ -576,100 +598,98 @@ export default function Home() {
       {!loading && recommendation && activeTab === "outfit" && (
         <div className="space-y-4">
 
-          {/* Avatar + Outfit Slots */}
+          {/* Outfit Slots */}
           <div className={`${card} backdrop-blur-md border rounded-3xl p-5`}>
-            <div className="flex items-start gap-4">
-              {/* CSS Avatar */}
-              <div className="flex-shrink-0">
-                <div className="relative w-20 h-28">
-                  <div
-                    className="absolute top-0 left-1/2 -translate-x-1/2 w-10 h-10 rounded-full"
-                    style={{ backgroundColor: skinColor }}
-                  />
-                  <div className="absolute top-9 left-1/2 -translate-x-1/2 w-12 h-14 bg-blue-400/60 rounded-lg" />
-                  <div className="absolute bottom-0 left-1/2 -translate-x-1/2 flex gap-1">
-                    <div className="w-4 h-8 bg-blue-800/60 rounded-b-lg" />
-                    <div className="w-4 h-8 bg-blue-800/60 rounded-b-lg" />
+            <div className="space-y-2">
+              <p className={`${textMuted} text-xs mb-1`}>
+                {OCCASION_LABELS[occasion]} • {MOODS.find(m => m.value === mood)?.emoji} {MOODS.find(m => m.value === mood)?.label}
+              </p>
+
+              {/* Non-negotiable slots */}
+              {visibleOutfitSlots.map((slot) => (
+                <div key={slot.key} className={`${cardInner} rounded-xl p-2`}>
+                  <div className="flex items-start gap-3">
+                    {getItemImage(slot.item) ? (
+                      <img
+                        src={getItemImage(slot.item)}
+                        alt={slot.item.name || slot.label}
+                        className="w-16 h-16 rounded-lg object-cover border border-white/10 flex-shrink-0"
+                      />
+                    ) : (
+                      <div className={`w-16 h-16 rounded-lg flex items-center justify-center text-xl ${isDark ? "bg-white/10 text-white/60" : "bg-black/10 text-gray-500"}`}>
+                        👕
+                      </div>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <p className={`${textFaint} text-xs`}>{slot.label}</p>
+                      <p className={`${text} text-sm font-medium truncate`}>{slot.item.name}</p>
+                      {slot.item.reason && (
+                        <p className={`${textFaint} text-xs italic mt-0.5`}>{slot.item.reason}</p>
+                      )}
+                      <button
+                        onClick={() => openWardrobePicker(slot.key)}
+                        className={`mt-2 text-xs px-2 py-1 rounded-lg ${isDark ? "bg-white/10 text-white" : "bg-black/10 text-gray-700"}`}
+                      >
+                        Choose other
+                      </button>
+                    </div>
                   </div>
                 </div>
-              </div>
+              ))}
 
-              <div className="flex-1 space-y-2">
-                <p className={`${textMuted} text-xs mb-1`}>
-                  {OCCASION_LABELS[occasion]} • {MOODS.find(m => m.value === mood)?.emoji} {MOODS.find(m => m.value === mood)?.label}
-                </p>
-
-                {/* Non-negotiable slots: Top, Bottom, Footwear — always show all three */}
-                {visibleOutfitSlots.map((slot) => (
-                  <div key={slot.key} className={`${cardInner} rounded-xl px-3 py-2`}>
-                    <p className={`${textFaint} text-xs`}>{slot.label}</p>
-                    {slot.item ? (
-                      <>
-                        <p className={`${text} text-sm font-medium`}>{slot.item.name}</p>
-                        {slot.item.reason && (
-                          <p className={`${textFaint} text-xs italic mt-0.5`}>{slot.item.reason}</p>
-                        )}
-                        <button
-                          onClick={() => openWardrobePicker(slot.key)}
-                          className={`mt-2 text-xs px-2 py-1 rounded-lg ${isDark ? "bg-white/10 text-white" : "bg-black/10 text-gray-700"}`}
-                        >
-                          Choose other
-                        </button>
-                      </>
-                    ) : (
-                      <>
-                        <p className={`${textMuted} text-sm`}>No recommendation for this slot</p>
-                        <button
-                          onClick={() => openWardrobePicker(slot.key)}
-                          className={`mt-2 text-xs px-2 py-1 rounded-lg ${isDark ? "bg-white/10 text-white" : "bg-black/10 text-gray-700"}`}
-                        >
-                          Choose from wardrobe
-                        </button>
-                      </>
-                    )}
+              {Object.entries(clearedSlots)
+                .filter(([, isCleared]) => isCleared)
+                .map(([slotKey]) => (
+                  <div key={`cleared-${slotKey}`} className={`${cardInner} rounded-xl px-3 py-2 border ${isDark ? "border-white/10" : "border-black/10"}`}>
+                    <p className={`${textFaint} text-xs capitalize`}>{slotKey}</p>
+                    <p className={`${text} text-sm`}>Removed from outfit</p>
+                    <button
+                      onClick={() => restoreSlot(slotKey)}
+                      className={`mt-2 text-xs px-2 py-1 rounded-lg ${isDark ? "bg-white/10 text-white" : "bg-black/10 text-gray-700"}`}
+                    >
+                      Add back
+                    </button>
                   </div>
                 ))}
 
-                {Object.entries(clearedSlots)
-                  .filter(([, isCleared]) => isCleared)
-                  .map(([slotKey]) => (
-                    <div key={`cleared-${slotKey}`} className={`${cardInner} rounded-xl px-3 py-2 border ${isDark ? "border-white/10" : "border-black/10"}`}>
-                      <p className={`${textFaint} text-xs capitalize`}>{slotKey}</p>
-                      <p className={`${text} text-sm`}>Removed from outfit</p>
-                      <button
-                        onClick={() => restoreSlot(slotKey)}
-                        className={`mt-2 text-xs px-2 py-1 rounded-lg ${isDark ? "bg-white/10 text-white" : "bg-black/10 text-gray-700"}`}
-                      >
-                        Add back
-                      </button>
-                    </div>
-                  ))}
-
-                {/* Optional: jacket, scarf, etc. — always show when we have a recommendation */}
-                {recommendation?.outfit && (
-                  <div>
-                    <p className={`${textFaint} text-xs mb-1 mt-2`}>Jacket / optional layer</p>
-                    {optionalItems.length > 0 ? (
-                      optionalItems.map((item, i) => (
-                        <div key={i} className={`${cardInner} rounded-xl px-3 py-2 mb-1 border ${isDark ? "border-white/10" : "border-black/10"}`}>
-                          <p className={`${text} text-sm font-medium`}>{item.name}</p>
-                          {item.reason && (
-                            <p className={`${textFaint} text-xs italic mt-0.5`}>{item.reason}</p>
+              {/* Optional items */}
+              {(optionalItems.length > 0 || recommendation?.outfit) && (
+                <div>
+                  <p className={`${textFaint} text-xs mb-1 mt-2`}>Also consider</p>
+                  {optionalItems.map((rawItem, i) => {
+                    const item = resolveOutfitItem(rawItem);
+                    return (
+                      <div key={i} className={`${cardInner} rounded-xl p-2 mb-1 border ${isDark ? "border-white/10" : "border-black/10"}`}>
+                        <div className="flex items-start gap-3">
+                          {getItemImage(item) ? (
+                            <img
+                              src={getItemImage(item)}
+                              alt={item?.name || "Optional item"}
+                              className="w-14 h-14 rounded-lg object-cover border border-white/10 flex-shrink-0"
+                            />
+                          ) : (
+                            <div className={`w-14 h-14 rounded-lg flex items-center justify-center text-lg ${isDark ? "bg-white/10 text-white/60" : "bg-black/10 text-gray-500"}`}>
+                              🧥
+                            </div>
                           )}
+                          <div className="min-w-0 flex-1">
+                            <p className={`${text} text-sm font-medium truncate`}>{item?.name}</p>
+                            {item?.reason && (
+                              <p className={`${textFaint} text-xs italic mt-0.5`}>{item.reason}</p>
+                            )}
+                          </div>
                         </div>
-                      ))
-                    ) : (
-                      <p className={`${textMuted} text-sm`}>None recommended — add one if you need an extra layer.</p>
-                    )}
-                    <button
-                      onClick={() => openWardrobePicker("optional")}
-                      className={`mt-1 text-xs px-2 py-1 rounded-lg ${isDark ? "bg-white/10 text-white" : "bg-black/10 text-gray-700"}`}
-                    >
-                      {optionalItems.length > 0 ? "Change optional" : "Choose optional from wardrobe"}
-                    </button>
-                  </div>
-                )}
-              </div>
+                      </div>
+                    );
+                  })}
+                  <button
+                    onClick={() => openWardrobePicker("optional")}
+                    className={`mt-1 text-xs px-2 py-1 rounded-lg ${isDark ? "bg-white/10 text-white" : "bg-black/10 text-gray-700"}`}
+                  >
+                    Choose optional from wardrobe
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Explanation */}
