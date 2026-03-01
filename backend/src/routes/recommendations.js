@@ -27,6 +27,104 @@ function ensureMandatorySlots(outfit, candidates) {
 }
 
 /**
+ * Compute a 0–100 readiness score based on how well the chosen outfit matches the weather.
+ * Deterministic — no LLM involvement.
+ *
+ * Scoring breakdown (100 pts total):
+ *  - Slot coverage     (30 pts): 10 per filled mandatory slot (top/bottom/footwear)
+ *  - Warmth match      (30 pts): how close item warmth is to the ideal for feels_like temp
+ *  - Rain readiness    (20 pts): waterproof footwear/jacket when rainy, full marks when dry
+ *  - Breathability     (10 pts): breathability match for hot weather, neutral otherwise
+ *  - Comfort           (10 pts): average user_comfort of outfit items
+ */
+function computeReadinessScore(outfit, candidates, weather) {
+  // Resolve full item data for each chosen slot from candidates
+  function resolve(slotItem, slotCandidates) {
+    if (!slotItem || !slotItem.item_id) return null;
+    return slotCandidates.find((c) => c.item_id === slotItem.item_id) || null;
+  }
+
+  const allCandidates = {
+    top: candidates.top || [],
+    bottom: candidates.bottom || [],
+    footwear: candidates.footwear || [],
+    optional: candidates.optional || [],
+  };
+
+  const top = resolve(outfit.top, allCandidates.top);
+  const bottom = resolve(outfit.bottom, allCandidates.bottom);
+  const footwear = resolve(outfit.footwear, allCandidates.footwear);
+  const optionalItems = (outfit.optional || [])
+    .map((o) => resolve(o, allCandidates.optional))
+    .filter(Boolean);
+
+  const filledSlots = [top, bottom, footwear].filter(Boolean);
+
+  // ── 1. Slot coverage (30 pts) ────────────────────────────────────────────
+  const slotScore = filledSlots.length * 10; // 10 per filled slot, max 30
+
+  // ── 2. Warmth match (30 pts) ─────────────────────────────────────────────
+  const feelsLike = weather ? Number(weather.feels_like_c) : null;
+  let warmthScore = 15; // neutral default when no weather
+
+  if (feelsLike !== null && !Number.isNaN(feelsLike)) {
+    // Ideal warmth rating (1–5) for a given temperature
+    let idealWarmth;
+    if (feelsLike <= 0)       idealWarmth = 5;
+    else if (feelsLike <= 8)  idealWarmth = 4;
+    else if (feelsLike <= 16) idealWarmth = 3;
+    else if (feelsLike <= 24) idealWarmth = 2;
+    else                      idealWarmth = 1;
+
+    const warmths = filledSlots.map((it) => Number(it?.tags?.warmth) || 3);
+    if (warmths.length > 0) {
+      const avgWarmth = warmths.reduce((a, b) => a + b, 0) / warmths.length;
+      // Max deviation is 4 (e.g. ideal=1, actual=5). Score degrades linearly.
+      const deviation = Math.abs(avgWarmth - idealWarmth);
+      warmthScore = Math.round(30 * (1 - deviation / 4));
+    }
+  }
+
+  // ── 3. Rain readiness (20 pts) ───────────────────────────────────────────
+  const isRainy = weather
+    ? weather.is_rainy_or_snowy === true || Number(weather.rain_probability) >= 0.5
+    : false;
+  let rainScore = 20; // full marks when dry or no weather data
+
+  if (isRainy) {
+    const hasWaterproofFootwear = footwear?.tags?.waterproof === true;
+    const hasWaterproofLayer =
+      optionalItems.some((o) => o?.tags?.waterproof === true) ||
+      top?.tags?.waterproof === true;
+
+    if (hasWaterproofFootwear && hasWaterproofLayer) rainScore = 20;
+    else if (hasWaterproofFootwear || hasWaterproofLayer) rainScore = 10;
+    else rainScore = 0;
+  }
+
+  // ── 4. Breathability match (10 pts) ─────────────────────────────────────
+  let breathScore = 7; // neutral default
+  if (feelsLike !== null && !Number.isNaN(feelsLike) && feelsLike > 22) {
+    const breathabilities = filledSlots.map((it) => Number(it?.tags?.breathability) || 3);
+    if (breathabilities.length > 0) {
+      const avgBreath = breathabilities.reduce((a, b) => a + b, 0) / breathabilities.length;
+      // Hot weather: want breathability >= 3. Score: 0–10 mapped from 1–5 scale.
+      breathScore = Math.round(((avgBreath - 1) / 4) * 10);
+    }
+  }
+
+  // ── 5. Comfort (10 pts) ──────────────────────────────────────────────────
+  const comforts = filledSlots.map((it) => Number(it?.tags?.user_comfort) || 3);
+  const avgComfort = comforts.length > 0
+    ? comforts.reduce((a, b) => a + b, 0) / comforts.length
+    : 3;
+  const comfortScore = Math.round(((avgComfort - 1) / 4) * 10);
+
+  const total = slotScore + warmthScore + rainScore + breathScore + comfortScore;
+  return Math.min(100, Math.max(0, total));
+}
+
+/**
  * GET /api/v1/recommendations/candidates
  * Fetches weather when lat/lon provided (from frontend: Geolocation API or profile), runs DB pre-filter,
  * returns candidates + optional weather.
@@ -145,7 +243,7 @@ router.post('/', authMiddleware, async (req, res) => {
       weather,
     });
 
-    let { outfit, explanation, alternatives, health_insights } = await recommendOutfit({
+    let { outfit, explanation, alternatives, health_insights, activities } = await recommendOutfit({
       candidates,
       weather,
       activity,
@@ -155,6 +253,8 @@ router.post('/', authMiddleware, async (req, res) => {
 
     outfit = ensureMandatorySlots(outfit || {}, candidates);
 
+    const readiness_score = computeReadinessScore(outfit, candidates, weather);
+
     const recommendationId = `rec_${nanoid(12)}`;
     const payload = {
       recommendation_id: recommendationId,
@@ -163,6 +263,8 @@ router.post('/', authMiddleware, async (req, res) => {
       outfit,
       explanation,
       alternatives: alternatives || [],
+      activities: activities || [],
+      readiness_score,
     };
     if (weather) payload.weather = weather;
 

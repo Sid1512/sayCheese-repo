@@ -6,7 +6,7 @@ import { getRecommendation } from "../services/recommendations";
 import { logWear } from "../services/wearLog";
 import { useTheme } from "../App";
 
-const OCCASIONS = ["casual", "work", "formal", "gym", "outdoor", "outdoor_brunch"];
+const OCCASIONS = ["casual", "work", "gym", "party"];
 const MOODS = [
   { value: "confident", emoji: "💪", label: "Confident" },
   { value: "relaxed", emoji: "😌", label: "Relaxed" },
@@ -16,15 +16,14 @@ const MOODS = [
 const OCCASION_LABELS = {
   casual: "Casual",
   work: "Work",
-  formal: "Formal",
   gym: "Gym",
-  outdoor: "Outdoor",
-  outdoor_brunch: "Brunch",
+  party: "Party",
 };
 
 const SELECTED_OUTFIT_KEY = "dayadapt_selected_outfit_v1";
 const RECOMMENDATION_CACHE_KEY = "dayadapt_recommendation_cache_v1";
 const HOME_STATE_KEY = "dayadapt_home_state_v1";
+const MANUAL_PICKS_KEY = "dayadapt_manual_picks_v1";
 
 export default function Home() {
   const { user, weather, wardrobe, location, locationName } = useApp();
@@ -46,6 +45,7 @@ export default function Home() {
     bottom: false,
     footwear: false,
   });
+  const [manualPicks, setManualPicks] = useState({}); // slot -> item, set by "Choose other"
   const [selectedOutfitHydrated, setSelectedOutfitHydrated] = useState(false);
   const [loading, setLoading] = useState(false);
   const [feedback, setFeedback] = useState(null);
@@ -160,6 +160,14 @@ export default function Home() {
     } finally {
       setSelectedOutfitHydrated(true);
     }
+
+    // Restore manual picks (independent of date/occasion/mood)
+    try {
+      const rawPicks = localStorage.getItem(MANUAL_PICKS_KEY);
+      if (rawPicks) setManualPicks(JSON.parse(rawPicks));
+    } catch {
+      // ignore
+    }
   }, [occasion, mood]);
 
   // Track which recommendation_id we last applied so we can tell when a fresh one arrives.
@@ -171,17 +179,16 @@ export default function Home() {
     const isNewRec = recId !== appliedRecId;
 
     setSelectedOutfit((prev) => ({
-      // If this is a brand-new recommendation (occasion/mood changed), always write its slots
-      // so stale items from the previous recommendation are never shown.
-      // If only clearedSlots changed (user toggling a slot), preserve their manual picks.
-      top: clearedSlots.top ? null : (isNewRec ? recommendation.outfit.top || null : prev.top || recommendation.outfit.top || null),
-      bottom: clearedSlots.bottom ? null : (isNewRec ? recommendation.outfit.bottom || null : prev.bottom || recommendation.outfit.bottom || null),
-      footwear: clearedSlots.footwear ? null : (isNewRec ? recommendation.outfit.footwear || null : prev.footwear || recommendation.outfit.footwear || null),
-      optional: isNewRec ? (recommendation.outfit.optional || []) : (prev.optional !== null ? prev.optional : (recommendation.outfit.optional || [])),
+      // Manual picks always win. If user cleared a slot, keep it cleared.
+      // For new recommendations, fall back to what the LLM suggested.
+      top: clearedSlots.top ? null : (manualPicks.top || (isNewRec ? recommendation.outfit.top || null : prev.top || recommendation.outfit.top || null)),
+      bottom: clearedSlots.bottom ? null : (manualPicks.bottom || (isNewRec ? recommendation.outfit.bottom || null : prev.bottom || recommendation.outfit.bottom || null)),
+      footwear: clearedSlots.footwear ? null : (manualPicks.footwear || (isNewRec ? recommendation.outfit.footwear || null : prev.footwear || recommendation.outfit.footwear || null)),
+      optional: manualPicks.optional || (isNewRec ? (recommendation.outfit.optional || []) : (prev.optional !== null ? prev.optional : (recommendation.outfit.optional || []))),
     }));
 
     if (isNewRec) setAppliedRecId(recId);
-  }, [recommendation, clearedSlots]);
+  }, [recommendation, clearedSlots, manualPicks]);
 
   useEffect(() => {
     const pickedSlot = searchParams.get("pickedSlot");
@@ -194,12 +201,24 @@ export default function Home() {
           ...prev,
           optional: [],
         }));
+        setManualPicks((prev) => {
+          const next = { ...prev };
+          delete next.optional;
+          localStorage.setItem(MANUAL_PICKS_KEY, JSON.stringify(next));
+          return next;
+        });
       } else {
         setSelectedOutfit((prev) => ({
           ...prev,
           [pickedSlot]: null,
         }));
         setClearedSlots((prev) => ({ ...prev, [pickedSlot]: true }));
+        setManualPicks((prev) => {
+          const next = { ...prev };
+          delete next[pickedSlot];
+          localStorage.setItem(MANUAL_PICKS_KEY, JSON.stringify(next));
+          return next;
+        });
       }
       setWearLogged(false);
       navigate("/", { replace: true });
@@ -210,9 +229,18 @@ export default function Home() {
       (item) => String(item.item_id || item.id) === String(pickedItemId)
     );
     if (pickedItem) {
+      const newPick = pickedSlot === "optional" ? [pickedItem] : pickedItem;
+
+      // Update manual picks — these persist across recommendation refreshes
+      setManualPicks((prev) => {
+        const next = { ...prev, [pickedSlot]: newPick };
+        localStorage.setItem(MANUAL_PICKS_KEY, JSON.stringify(next));
+        return next;
+      });
+
       setSelectedOutfit((prev) => ({
         ...prev,
-        [pickedSlot]: pickedSlot === "optional" ? [pickedItem] : pickedItem,
+        [pickedSlot]: newPick,
       }));
       if (pickedSlot !== "optional") {
         setClearedSlots((prev) => ({ ...prev, [pickedSlot]: false }));
@@ -561,6 +589,8 @@ export default function Home() {
                 setRecommendation(null);
                 setSelectedOutfit({ top: null, bottom: null, footwear: null, optional: null });
                 setClearedSlots({ top: false, bottom: false, footwear: false });
+                setManualPicks({});
+                localStorage.removeItem(MANUAL_PICKS_KEY);
                 setWearLogged(false);
               }}
               className={`px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
@@ -585,6 +615,8 @@ export default function Home() {
                 setRecommendation(null);
                 setSelectedOutfit({ top: null, bottom: null, footwear: null, optional: null });
                 setClearedSlots({ top: false, bottom: false, footwear: false });
+                setManualPicks({});
+                localStorage.removeItem(MANUAL_PICKS_KEY);
                 setWearLogged(false);
               }}
               className={`py-3 rounded-2xl border text-sm font-medium transition-all flex flex-col items-center gap-1 ${
@@ -824,32 +856,79 @@ export default function Home() {
           {/* Readiness Score */}
           {recommendation?.readiness_score !== undefined && (
             <div className={`${card} backdrop-blur-md border rounded-3xl p-5 text-center`}>
-              <p className={`${textMuted} text-sm mb-1`}>Daily Readiness Score</p>
-              <p className={`${text} text-7xl font-thin`}>{recommendation.readiness_score}</p>
+              <p className={`${textMuted} text-sm mb-1`}>Outfit Readiness Score</p>
+              <p className={`text-7xl font-thin ${
+                recommendation.readiness_score >= 80
+                  ? "text-emerald-400"
+                  : recommendation.readiness_score >= 55
+                  ? "text-yellow-400"
+                  : "text-red-400"
+              }`}>
+                {recommendation.readiness_score}
+              </p>
               <p className={`${textFaint} text-sm`}>/ 100</p>
+              <p className={`${textMuted} text-xs mt-1`}>
+                {recommendation.readiness_score >= 80
+                  ? "Your wardrobe is well prepared for today"
+                  : recommendation.readiness_score >= 55
+                  ? "Decent match — check the health alerts"
+                  : "Today's conditions are tricky for your wardrobe"}
+              </p>
             </div>
           )}
         </div>
       )}
 
       {/* ── ACTIVITIES TAB ── */}
+      {loading && activeTab === "activities" && (
+        <div className={`${card} backdrop-blur-md border rounded-3xl p-5`}>
+          <p className={`${text} font-semibold mb-4`}>Suggested for today</p>
+          <div className="space-y-3">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className={`${cardInner} rounded-2xl px-4 py-3 animate-pulse`}>
+                <div className={`h-4 rounded ${isDark ? "bg-white/10" : "bg-black/10"} w-3/4`} />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {!loading && recommendation && activeTab === "activities" && (
         <div className={`${card} backdrop-blur-md border rounded-3xl p-5`}>
           <p className={`${text} font-semibold mb-4`}>Suggested for today</p>
           {recommendation.activities?.length > 0 ? (
             <div className="space-y-3">
-              {recommendation.activities.map((activity, i) => (
-                <div key={i} className={`flex items-center gap-3 ${cardInner} rounded-2xl px-4 py-3`}>
-                  <span className="text-2xl">
-                    {i === 0 ? "🏃" : i === 1 ? "☕" : i === 2 ? "📚" : i === 3 ? "🌿" : "🎨"}
-                  </span>
-                  <p className={`${text} text-sm`}>{activity}</p>
-                </div>
-              ))}
+              {recommendation.activities.map((activity, i) => {
+                const icons = ["🏃", "☕", "📚", "🌿", "🎨", "🎵", "🧘", "🚴"];
+                const moodIcons = {
+                  energised: ["🏃", "🚴", "🧗", "⚽"],
+                  relaxed:   ["☕", "📚", "🌿", "🧘"],
+                  confident: ["🎨", "🎵", "🍽️", "🛍️"],
+                };
+                const moodSet = moodIcons[mood] || icons;
+                const icon = moodSet[i] || icons[i % icons.length];
+                return (
+                  <div key={i} className={`flex items-center gap-3 ${cardInner} rounded-2xl px-4 py-3`}>
+                    <span className="text-2xl">{icon}</span>
+                    <p className={`${text} text-sm`}>{activity}</p>
+                  </div>
+                );
+              })}
             </div>
           ) : (
-            <p className={`${textMuted} text-sm`}>No activity suggestions available.</p>
+            <div className="text-center py-4">
+              <div className="text-4xl mb-2">🎯</div>
+              <p className={`${textMuted} text-sm`}>No activity suggestions available.</p>
+            </div>
           )}
+        </div>
+      )}
+
+      {!loading && !recommendation && activeTab === "activities" && wardrobe.length > 0 && (
+        <div className={`${card} backdrop-blur-md border rounded-3xl p-8 text-center`}>
+          <div className="text-5xl mb-3">🎯</div>
+          <p className={`${text} font-medium`}>Activities load with your outfit</p>
+          <p className={`${textFaint} text-sm mt-1`}>Get a recommendation first to see today's suggestions</p>
         </div>
       )}
 

@@ -35,11 +35,8 @@ const OPTIONAL_CATEGORIES = [
  */
 const ACTIVITY_OCCASION_MAP = {
   gym: ['athletic'],
-  office: ['work', 'office', 'formal', 'smart_casual'],
   work: ['work', 'office', 'formal', 'smart_casual'],
-  formal: ['formal', 'smart_casual'],
-  outdoor: ['outdoor', 'casual'],
-  outdoor_brunch: ['outdoor', 'casual'],
+  party: ['party', 'formal', 'smart_casual'],
   casual: null, // allow all
 };
 
@@ -191,9 +188,10 @@ async function getSlotCandidates(userId, category, opts) {
   if (DEBUG) console.log(`[prefilter] slot=${category} DB query: userId + category=${category} → ${docs.length} docs`);
 
   // Recency exclusion: remove items worn within the last N days (lastWornDate >= cutoffDate).
+  // Footwear is excluded from this filter — shoes can be repeated freely.
   // If all items are excluded, drop the filter so the LLM still receives candidates.
   let recencyFiltered = docs;
-  if (cutoffDate) {
+  if (cutoffDate && category !== 'footwear') {
     const excluded = docs.filter((d) => {
       const worn = toDateStr(d.data.lastWornDate);
       return worn != null && worn >= cutoffDate;

@@ -16,7 +16,8 @@ Respond with exactly one JSON object (no markdown, no code fence) with this shap
   },
   "explanation": "2-3 sentences for the user.",
   "alternatives": [ { "replaces": "top" | "bottom" | "footwear", "item_id": "itm_xxx", "name": "string", "reason": "one sentence" } ],
-  "health_insights": [ { "type": "thermal" | "uv" | "rain" | "activity" | "other", "severity": "info" | "warning", "message": "one sentence" } ]
+  "health_insights": [ { "type": "thermal" | "uv" | "rain" | "activity" | "other", "severity": "info" | "warning", "message": "one sentence" } ],
+  "activities": [ "string" ]
 }
 Rules:
 - CRITICAL: Always include exactly one top, one bottom, and one footwear in outfit when candidates exist for that slot. Never omit top, bottom, or footwear unless that slot has zero candidates. Pick exactly one item_id per slot from the candidates; use the item_id strings as given. Candidates are ordered with the best option first (e.g. warmest for cold weather when no ideal match existed).
@@ -24,6 +25,7 @@ Rules:
 - optional: include 0+ items (e.g. jacket, scarf) only when weather or activity clearly need them.
 - alternatives: 0-3 items, each replaces one slot with another candidate from that slot.
 - health_insights: 0-4 short messages (thermal, UV, rain, activity-matched). If the best available item was not ideal for weather (e.g. no warm enough top), add a brief thermal/rain insight so the user knows.
+- activities: exactly 3-4 short activity suggestions (each under 10 words) tailored to the combination of weather, occasion, and mood. Examples: "Take a walk in the park", "Try a new coffee shop", "Catch up on reading indoors". Make them feel personal and specific — not generic. Vary them based on mood (energised = active; relaxed = calm; confident = social).
 `;
 
 /**
@@ -101,6 +103,9 @@ async function recommendOutfit(opts) {
   const explanation = typeof parsed.explanation === 'string' ? parsed.explanation : 'Outfit chosen from your wardrobe.';
   const alternatives = Array.isArray(parsed.alternatives) ? parsed.alternatives : [];
   const health_insights = Array.isArray(parsed.health_insights) ? parsed.health_insights : [];
+  const activities = Array.isArray(parsed.activities)
+    ? parsed.activities.filter((a) => typeof a === 'string' && a.trim()).slice(0, 4)
+    : [];
 
   const normalizedOutfit = enforceRequiredSlots(outfit, candidates, weather);
   const normalizedAlternatives = sanitizeAlternatives(alternatives, candidates);
@@ -110,6 +115,7 @@ async function recommendOutfit(opts) {
     explanation,
     alternatives: normalizedAlternatives,
     health_insights,
+    activities,
   };
 }
 

@@ -75,12 +75,19 @@ router.post('/', authMiddleware, async (req, res) => {
       const { timesWornLast7Days, timesWornLast30Days, wearHistory } =
         computeRollingCounts(cur.wearHistory || [], logDate);
 
-      batch.update(snap.ref, {
-        lastWornDate: logDate,
+      // Footwear can be repeated freely — don't track lastWornDate so it's
+      // never excluded by the recency filter in prefilter.js.
+      const isFootwear = cur.category === 'footwear';
+      const update = {
         timesWornLast7Days,
         timesWornLast30Days,
-        wearHistory, // persist ring buffer so future logs can recompute accurately
-      });
+        wearHistory,
+      };
+      if (!isFootwear) {
+        update.lastWornDate = logDate;
+      }
+
+      batch.update(snap.ref, update);
     });
     await batch.commit();
 

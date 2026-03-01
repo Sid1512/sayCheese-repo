@@ -70,8 +70,8 @@ export function AppProvider({ children }) {
       setWeather({ ...weatherData, environmental });
       setLocationName(name);
     } catch (_err) {
-      // // 🔥 VERY HOT
-      // const [fallbackLat, fallbackLon] = [-23.79844, 117.260189];
+      // 🔥 VERY HOT
+      const [fallbackLat, fallbackLon] = [-23.79844, 117.260189];
 
       // // ☀️ HOT & SUNNY
       // const [fallbackLat, fallbackLon] = [25.2048, 55.2708];
@@ -82,11 +82,11 @@ export function AppProvider({ children }) {
       // // ❄️ COLD & CLEAR
       // const [fallbackLat, fallbackLon] = [64.1466, -21.9426];
 
-      // ❄️ SNOWY
-      const [fallbackLat, fallbackLon] = [52.354535, 56.161962];
+      // // ❄️ SNOWY
+      // const [fallbackLat, fallbackLon] = [52.354535, 56.161962];
 
       // // 🌧️ RAINY
-      // const [fallbackLat, fallbackLon] = [-3.794748, 24.154905];
+      // const [fallbackLat, fallbackLon] = [-36.10102,143.249513];
 
       // // ⛈️ THUNDERSTORM
       // const [fallbackLat, fallbackLon] = [25.7617, -80.1918];

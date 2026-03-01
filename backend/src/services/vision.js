@@ -2,7 +2,7 @@ const Anthropic = require('@anthropic-ai/sdk').default;
 
 const CATEGORIES =
   'top, bottom, footwear, thermal, jacket, scarf, hat, gloves, facemask, umbrella';
-const OCCASIONS = 'casual, work, formal, outdoor, athletic, smart_casual';
+const OCCASIONS = 'casual, work, athletic, smart_casual, party';
 
 const SCHEMA_PROMPT = `
 Respond with exactly one JSON object (no markdown, no code fence) with this shape:
