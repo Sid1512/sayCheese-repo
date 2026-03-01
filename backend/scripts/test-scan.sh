@@ -8,8 +8,10 @@
 # Optional: IMAGE_PATH=./path/to/photo.jpg
 # Optional: ACTIVITY=casual|office|gym|formal|outdoor (pre-filter occasion + recommendation)
 # Optional: CANDIDATES_DATE=2026-02-28 (recency cutoff and recommendation date)
-# Optional: LAT=40.7128 LON=-74.0060 (weather for pre-filter and recommendation)
+# Optional: LAT=40.7128 LON=-74.0060 (weather for pre-filter + next-best ordering)
 # Optional: SKIP_RECOMMEND=1 (do not call POST /recommendations after step 5)
+#
+# Tests: pre-filter, mandatory top/bottom/footwear, next-best when no weather-ideal item.
 
 set -e
 BASE="${BASE_URL:-http://localhost:3000/api/v1}"
@@ -193,6 +195,8 @@ let d=''; process.stdin.on('data',c=>d+=c); process.stdin.on('end',()=>{
     }
     const c = j.counts || {};
     console.log('   counts: top=' + (c.top||0) + ', bottom=' + (c.bottom||0) + ', footwear=' + (c.footwear||0) + ', optional=' + (c.optional||0));
+    const empty = ['top','bottom','footwear'].filter(s => !(c[s] > 0));
+    if (empty.length) console.log('   note: no candidates for ' + empty.join(', ') + ' (mandatory slots need items in wardrobe)');
     const cand = j.candidates || {};
     ['top','bottom','footwear','optional'].forEach(slot => {
       const arr = cand[slot] || [];
@@ -229,11 +233,19 @@ let d=''; process.stdin.on('data',c=>d+=c); process.stdin.on('end',()=>{
     console.log('   date:', j.date);
     if (j.weather) console.log('   weather: feels_like_c=' + j.weather.feels_like_c + ', ' + j.weather.condition);
     if (j.outfit) {
-      ['top','bottom','footwear'].forEach(s => { if (j.outfit[s]) console.log('   outfit.' + s + ':', j.outfit[s].name, '-', (j.outfit[s].reason||'').slice(0,60)); });
+      const slots = ['top','bottom','footwear'];
+      const filled = slots.filter(s => j.outfit[s] && j.outfit[s].item_id);
+      console.log('   mandatory slots: ' + slots.map(s => filled.includes(s) ? s + ' ✓' : s + ' -').join('  '));
+      slots.forEach(s => {
+        if (j.outfit[s]) console.log('   outfit.' + s + ':', j.outfit[s].name, '-', (j.outfit[s].reason||'').slice(0,70));
+      });
       (j.outfit.optional||[]).forEach((o,i)=> console.log('   outfit.optional['+i+']:', o.name, '-', (o.reason||'').slice(0,60)));
     }
-    if (j.health_insights && j.health_insights.length) console.log('   health_insights:', j.health_insights.length);
-    console.log('   explanation:', (j.explanation||'').slice(0,140) + ((j.explanation||'').length > 140 ? '...' : ''));
+    if (j.health_insights && j.health_insights.length) {
+      console.log('   health_insights:');
+      j.health_insights.forEach((h,i)=> console.log('     ['+i+']', (h.severity||'').toUpperCase(), (h.message||'').slice(0,100)));
+    }
+    console.log('   explanation:', (j.explanation||'').slice(0,160) + ((j.explanation||'').length > 160 ? '...' : ''));
   } catch(e) { console.error(d); process.exit(1); }
 });
 "

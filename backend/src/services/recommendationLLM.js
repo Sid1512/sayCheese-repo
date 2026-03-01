@@ -19,11 +19,11 @@ Respond with exactly one JSON object (no markdown, no code fence) with this shap
   "health_insights": [ { "type": "thermal" | "uv" | "rain" | "activity" | "other", "severity": "info" | "warning", "message": "one sentence" } ]
 }
 Rules:
-- Pick exactly one item_id per slot from the candidates provided; use the item_id strings as given.
-- If a slot has no candidates, omit that key from outfit (or use null). Prefer to still fill other slots.
+- Top, bottom, and footwear are mandatory when that slot has at least one candidate. Always pick exactly one item_id per slot from the candidates; use the item_id strings as given. Candidates are ordered with the best option first (e.g. warmest for cold weather when no ideal match existed).
+- If a slot has no candidates at all, omit that key from outfit (or use null). Still fill every other slot that has candidates.
 - optional: include 0+ items (e.g. jacket, scarf) only when weather or activity clearly need them.
 - alternatives: 0-3 items, each replaces one slot with another candidate from that slot.
-- health_insights: 0-4 short messages (thermal, UV, rain, activity-matched).
+- health_insights: 0-4 short messages (thermal, UV, rain, activity-matched). If the best available item was not ideal for weather (e.g. no warm enough top), add a brief thermal/rain insight so the user knows.
 `;
 
 /**

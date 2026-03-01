@@ -7,6 +7,25 @@ const { recommendOutfit } = require('../services/recommendationLLM');
 
 const router = express.Router();
 
+/** Ensure outfit has top, bottom, footwear when candidates exist; fill with first (next-best) candidate if missing. */
+function ensureMandatorySlots(outfit, candidates) {
+  const out = { ...outfit, optional: outfit.optional || [] };
+  for (const slot of ['top', 'bottom', 'footwear']) {
+    const list = candidates[slot] || [];
+    if (list.length === 0) continue;
+    const current = out[slot] && out[slot].item_id;
+    const valid = current && list.some((c) => c.item_id === current);
+    if (valid) continue;
+    const first = list[0];
+    out[slot] = {
+      item_id: first.item_id,
+      name: first.name,
+      reason: 'Best available option from your wardrobe for this slot.',
+    };
+  }
+  return out;
+}
+
 /**
  * GET /api/v1/recommendations/candidates
  * Fetches weather when lat/lon provided (from frontend: Geolocation API or profile), runs DB pre-filter,
@@ -122,13 +141,15 @@ router.post('/', authMiddleware, async (req, res) => {
       weather,
     });
 
-    const { outfit, explanation, alternatives, health_insights } = await recommendOutfit({
+    let { outfit, explanation, alternatives, health_insights } = await recommendOutfit({
       candidates,
       weather,
       activity,
       mood,
       date: dateOpt,
     });
+
+    outfit = ensureMandatorySlots(outfit || {}, candidates);
 
     const recommendationId = `rec_${nanoid(12)}`;
     const payload = {

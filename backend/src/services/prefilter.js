@@ -142,16 +142,17 @@ function filterByOccasion(docs, allowedOccasions) {
 
 /**
  * Filter by warmth band using feels_like (weather). Cold → warmth >= 3; Hot → warmth <= 2 and breathability >= 3; Mild → no filter.
+ * If filter yields 0 items, returns original list (mandatory slots must get next-best option).
  * @param {Array<{ id: string, data: object }>} docs
  * @param {{ feels_like_c: number } | null} weather - if null, no filter
- * @returns {Array<{ id: string, data: object }>}
+ * @returns {{ filtered: Array<{ id: string, data: object }>, dropped: boolean }} dropped true when we fell back to full list
  */
 function filterByWarmth(docs, weather) {
-  if (!weather || weather.feels_like_c == null) return docs;
+  if (!weather || weather.feels_like_c == null) return { filtered: docs, dropped: false };
   const feelsLike = Number(weather.feels_like_c);
-  if (Number.isNaN(feelsLike)) return docs;
+  if (Number.isNaN(feelsLike)) return { filtered: docs, dropped: false };
 
-  return docs.filter((d) => {
+  const filtered = docs.filter((d) => {
     const tags = d.data.tags || {};
     const warmth = Number(tags.warmth);
     const breathability = Number(tags.breathability);
@@ -161,6 +162,38 @@ function filterByWarmth(docs, weather) {
     if (feelsLike < COLD_THRESHOLD_C) return w >= 3;
     if (feelsLike > HOT_THRESHOLD_C) return w <= 2 && b >= 3;
     return true;
+  });
+
+  if (filtered.length === 0) return { filtered: docs, dropped: true };
+  return { filtered, dropped: false };
+}
+
+/**
+ * Sort docs by next-best for weather: cold → warmest first; hot → most breathable / lightest first.
+ * Used when we had to drop the warmth filter so the best available option is recommended.
+ * @param {Array<{ id: string, data: object }>} docs
+ * @param {{ feels_like_c: number } | null} weather
+ * @returns {Array<{ id: string, data: object }>}
+ */
+function sortByNextBestWeather(docs, weather) {
+  if (!weather || weather.feels_like_c == null || docs.length === 0) return docs;
+  const feelsLike = Number(weather.feels_like_c);
+  if (Number.isNaN(feelsLike)) return docs;
+
+  return [...docs].sort((a, b) => {
+    const tw = (d) => (Number.isNaN(Number(d.data.tags?.warmth)) ? 3 : Math.min(5, Math.max(1, Math.round(Number(d.data.tags?.warmth)))));
+    const tb = (d) => (Number.isNaN(Number(d.data.tags?.breathability)) ? 3 : Math.min(5, Math.max(1, Math.round(Number(d.data.tags?.breathability)))));
+
+    if (feelsLike < COLD_THRESHOLD_C) {
+      return tw(b) - tw(a);
+    }
+    if (feelsLike > HOT_THRESHOLD_C) {
+      const bA = tb(a);
+      const bB = tb(b);
+      if (bB !== bA) return bB - bA;
+      return tw(a) - tw(b);
+    }
+    return 0;
   });
 }
 
@@ -221,13 +254,17 @@ async function getSlotCandidates(userId, category, opts) {
   }
 
   const beforeWarmth = filtered.length;
-  filtered = filterByWarmth(filtered, weather);
+  const warmthResult = filterByWarmth(filtered, weather);
+  filtered = warmthResult.filtered;
+  if (warmthResult.dropped) filtered = sortByNextBestWeather(filtered, weather);
   if (DEBUG && weather && weather.feels_like_c != null) {
     const fl = Number(weather.feels_like_c);
     let cond = 'mild (no filter)';
     if (fl < COLD_THRESHOLD_C) cond = `cold → warmth>=3`;
     else if (fl > HOT_THRESHOLD_C) cond = `hot → warmth<=2 & breathability>=3`;
-    console.log(`[prefilter] slot=${category} warmth: feels_like=${fl}°C → ${cond} → ${beforeWarmth} → ${filtered.length}`);
+    console.log(
+      `[prefilter] slot=${category} warmth: feels_like=${fl}°C → ${cond} → ${beforeWarmth} → ${filtered.length}${warmthResult.dropped ? ' (dropped filter, next-best order)' : ''}`
+    );
   }
 
   const beforeRain = filtered.length;
@@ -291,13 +328,17 @@ async function getOptionalCandidates(userId, opts) {
   }
 
   const beforeWarmth = filtered.length;
-  filtered = filterByWarmth(filtered, weather);
+  const warmthResult = filterByWarmth(filtered, weather);
+  filtered = warmthResult.filtered;
+  if (warmthResult.dropped) filtered = sortByNextBestWeather(filtered, weather);
   if (DEBUG && weather && weather.feels_like_c != null) {
     const fl = Number(weather.feels_like_c);
     let cond = 'mild (no filter)';
     if (fl < COLD_THRESHOLD_C) cond = `cold → warmth>=3`;
     else if (fl > HOT_THRESHOLD_C) cond = `hot → warmth<=2 & breathability>=3`;
-    console.log(`[prefilter] slot=optional warmth: feels_like=${fl}°C → ${cond} → ${beforeWarmth} → ${filtered.length}`);
+    console.log(
+      `[prefilter] slot=optional warmth: feels_like=${fl}°C → ${cond} → ${beforeWarmth} → ${filtered.length}${warmthResult.dropped ? ' (dropped filter, next-best order)' : ''}`
+    );
   }
 
   const beforeRain = filtered.length;
