@@ -5,6 +5,29 @@ export async function getWeather(lat, lon) {
   return data;
 }
 
+export async function getAirQuality(lat, lon) {
+  try {
+    const url = `https://air-quality.api.open-meteo.com/v1/air-quality?latitude=${lat}&longitude=${lon}&hourly=us_aqi,pollen_grass,pollen_tree,pollen_weed&timezone=auto&forecast_days=1`;
+    const res = await fetch(url);
+    const data = await res.json();
+
+    const first = (arr) => (Array.isArray(arr) && arr.length > 0 ? arr[0] : null);
+    return {
+      us_aqi: first(data?.hourly?.us_aqi),
+      pollen_grass: first(data?.hourly?.pollen_grass),
+      pollen_tree: first(data?.hourly?.pollen_tree),
+      pollen_weed: first(data?.hourly?.pollen_weed),
+    };
+  } catch {
+    return {
+      us_aqi: 72,
+      pollen_grass: 2,
+      pollen_tree: 1,
+      pollen_weed: 2,
+    };
+  }
+}
+
 export function getWeatherDescription(code) {
   if (code === 0) return { label: "Clear Sky", icon: "☀️", risk: "low" };
   if (code <= 3) return { label: "Partly Cloudy", icon: "⛅", risk: "low" };

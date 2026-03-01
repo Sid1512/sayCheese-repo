@@ -1,3 +1,5 @@
+import { mockRequest, shouldForceMockApi } from "./mockApi";
+
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:3000/api/v1";
 
 function getToken() {
@@ -5,6 +7,10 @@ function getToken() {
 }
 
 async function request(path, options = {}) {
+  if (shouldForceMockApi()) {
+    return await mockRequest(path, options);
+  }
+
   const token = getToken();
 
   const headers = {
@@ -20,15 +26,26 @@ async function request(path, options = {}) {
     headers["Authorization"] = `Bearer ${token}`;
   }
 
-  const res = await fetch(`${BASE_URL}${path}`, {
-    ...options,
-    headers,
-  });
+  let res;
+  try {
+    res = await fetch(`${BASE_URL}${path}`, {
+      ...options,
+      headers,
+    });
+  } catch (err) {
+    console.warn(`API fetch failed for ${path}. Falling back to mock API.`, err);
+    return await mockRequest(path, options);
+  }
 
   // Handle no content responses (e.g. DELETE 204)
   if (res.status === 204) return null;
 
-  const data = await res.json();
+  let data = null;
+  try {
+    data = await res.json();
+  } catch {
+    data = null;
+  }
 
   // Token expired or invalid — clear session
   if (res.status === 401) {

@@ -1,5 +1,5 @@
 import { Link, useLocation } from "react-router-dom";
-import { Home, User } from "lucide-react";
+import { Home, Shirt, User } from "lucide-react";
 import { useTheme } from "../App";
 
 export default function Navbar() {
@@ -21,6 +21,15 @@ export default function Navbar() {
         >
           <Home size={22} />
           <span className="text-xs">Home</span>
+        </Link>
+        <Link
+          to="/wardrobe"
+          className={`flex flex-col items-center gap-1 transition-all ${
+            location.pathname === "/wardrobe" ? active : inactive
+          }`}
+        >
+          <Shirt size={22} />
+          <span className="text-xs">Wardrobe</span>
         </Link>
         <Link
           to="/profile"

@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AppProvider, useApp } from "./context/AppContext";
 import Home from "./pages/Home";
 import Profile from "./pages/Profile";
+import Wardrobe from "./pages/Wardrobe";
 import Onboarding from "./pages/Onboarding";
 import Navbar from "./components/Navbar";
 import WeatherBackground from "./components/WeatherBackground";
@@ -64,6 +65,7 @@ function AppRoutes() {
           <Routes>
             <Route path="/onboarding" element={!user ? <Onboarding /> : <Navigate to="/" />} />
             <Route path="/" element={user ? <Home /> : <Navigate to="/onboarding" />} />
+            <Route path="/wardrobe" element={user ? <Wardrobe /> : <Navigate to="/onboarding" />} />
             <Route path="/profile" element={user ? <Profile /> : <Navigate to="/onboarding" />} />
           </Routes>
         </div>
