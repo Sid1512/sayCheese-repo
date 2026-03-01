@@ -1,0 +1,552 @@
+import { useState, useRef } from "react";
+import { useApp } from "../context/AppContext";
+import { useTheme } from "../App";
+import { scanItem, addWardrobeItem, deleteWardrobeItem } from "../services/wardrobe";
+import { getWardrobeUtilization } from "../services/insights";
+
+export default function Profile() {
+  const { user, wardrobe, refreshWardrobe, handleLogout } = useApp();
+  const { isDark } = useTheme();
+  const [selectedItem, setSelectedItem] = useState(null);
+  const [scanning, setScanning] = useState(false);
+  const [scanResult, setScanResult] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [activeTab, setActiveTab] = useState("wardrobe");
+  const [insights, setInsights] = useState(null);
+  const [insightsPeriod, setInsightsPeriod] = useState("month");
+  const [insightsLoading, setInsightsLoading] = useState(false);
+  const [deleting, setDeleting] = useState(null);
+  const fileRef = useRef();
+
+  const text = isDark ? "text-white" : "text-gray-900";
+  const textMuted = isDark ? "text-white/60" : "text-gray-500";
+  const textFaint = isDark ? "text-white/40" : "text-gray-400";
+  const card = isDark ? "bg-white/10 border-white/20" : "bg-black/10 border-black/20";
+  const cardInner = isDark ? "bg-white/10" : "bg-black/10";
+  const modalBg = isDark ? "bg-blue-950" : "bg-white";
+  const addBtn = isDark ? "bg-white text-blue-900 hover:bg-blue-50" : "bg-gray-900 text-white hover:bg-gray-800";
+  const closeBtn = isDark ? "bg-white/10 text-white" : "bg-black/10 text-gray-900";
+  const tabActive = isDark ? "bg-white text-blue-900" : "bg-gray-900 text-white";
+  const tabInactive = isDark ? "bg-white/10 text-white" : "bg-black/10 text-gray-800";
+
+  const categoryEmoji = (cat) => {
+    const map = {
+      top: "👕", bottom: "👖", footwear: "👟",
+      jacket: "🧥", thermal: "🧣", scarf: "🧣",
+      hat: "🧢", gloves: "🧤", facemask: "😷",
+      umbrella: "☂️", accessories: "🎩",
+    };
+    return map[cat] || "👔";
+  };
+
+  const sustainabilityColor = (score) => {
+    if (score >= 4) return "text-green-500";
+    if (score >= 3) return "text-yellow-500";
+    return "text-red-500";
+  };
+
+  // ── Scan flow ──
+  async function handlePhotoSelect(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    setScanning(true);
+    setScanResult(null);
+    try {
+      const result = await scanItem(file);
+      setScanResult({
+        ...result.detected_item,
+        // editable fields
+        editName: result.detected_item.name,
+        editComfort: result.detected_item.tags?.user_comfort || 3,
+      });
+    } catch (err) {
+      alert("Failed to scan item. Please try again.");
+      console.error(err);
+    } finally {
+      setScanning(false);
+      // reset file input
+      e.target.value = "";
+    }
+  }
+
+  async function handleConfirmScan() {
+    if (!scanResult) return;
+    setSaving(true);
+    try {
+      await addWardrobeItem({
+        name: scanResult.editName,
+        description: scanResult.description,
+        category: scanResult.category,
+        image_url: scanResult.image_url,
+        tags: {
+          ...scanResult.tags,
+          user_comfort: scanResult.editComfort,
+        },
+      });
+      setScanResult(null);
+      await refreshWardrobe();
+    } catch (err) {
+      alert("Failed to save item. Please try again.");
+      console.error(err);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // ── Delete item ──
+  async function handleDelete(itemId) {
+    if (!confirm("Remove this item from your wardrobe?")) return;
+    setDeleting(itemId);
+    try {
+      await deleteWardrobeItem(itemId);
+      setSelectedItem(null);
+      await refreshWardrobe();
+    } catch (err) {
+      alert("Failed to delete item.");
+      console.error(err);
+    } finally {
+      setDeleting(null);
+    }
+  }
+
+  // ── Insights ──
+  async function loadInsights(period) {
+    setInsightsLoading(true);
+    try {
+      const data = await getWardrobeUtilization(period);
+      setInsights(data);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setInsightsLoading(false);
+    }
+  }
+
+  function handleInsightsTab() {
+    setActiveTab("insights");
+    if (!insights) loadInsights(insightsPeriod);
+  }
+
+  const groupedWardrobe = wardrobe.reduce((acc, item) => {
+    const cat = item.category || "other";
+    if (!acc[cat]) acc[cat] = [];
+    acc[cat].push(item);
+    return acc;
+  }, {});
+
+  const skinColor =
+    user?.preferences?.skinTone === "Light" ? "#FDDBB4" :
+    user?.preferences?.skinTone === "Medium" ? "#D4A574" :
+    user?.preferences?.skinTone === "Tan" ? "#C68642" : "#8D5524";
+
+  return (
+    <div className="min-h-screen pb-24 px-4 pt-6 max-w-md mx-auto">
+      <div className="flex justify-between items-center mb-6">
+        <h1 className={`${text} text-2xl font-bold`}>Profile</h1>
+        <button
+          onClick={handleLogout}
+          className={`${textFaint} text-sm hover:${text} transition-all`}
+        >
+          Sign out
+        </button>
+      </div>
+
+      {/* User Card */}
+      <div className={`${card} backdrop-blur-md border rounded-3xl p-5 mb-6`}>
+        <div className="flex items-center gap-4">
+          <div
+            className="w-16 h-16 rounded-full border-2 flex items-center justify-center text-2xl flex-shrink-0"
+            style={{
+              borderColor: isDark ? "rgba(255,255,255,0.3)" : "rgba(0,0,0,0.2)",
+              backgroundColor: skinColor,
+            }}
+          >
+            {user?.preferences?.gender === "Male" ? "👨" :
+             user?.preferences?.gender === "Female" ? "👩" : "🧑"}
+          </div>
+          <div className="flex-1">
+            <h2 className={`${text} text-xl font-bold`}>{user?.name}</h2>
+            <p className={`${textMuted} text-sm`}>{user?.email}</p>
+            {user?.preferences?.age && (
+              <p className={`${textFaint} text-xs`}>
+                {user.preferences.age} years
+                {user.preferences.height ? ` • ${user.preferences.height}cm` : ""}
+                {user.preferences.weight ? ` • ${user.preferences.weight}kg` : ""}
+              </p>
+            )}
+          </div>
+        </div>
+        {user?.preferences?.stylePreference?.length > 0 && (
+          <div className={`mt-4 pt-4 border-t ${isDark ? "border-white/10" : "border-black/10"}`}>
+            <p className={`${textFaint} text-xs mb-2`}>Style preferences</p>
+            <div className="flex flex-wrap gap-2">
+              {user.preferences.stylePreference.map((s) => (
+                <span key={s} className={`${cardInner} ${text} text-xs px-3 py-1 rounded-full`}>{s}</span>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Wardrobe Stats */}
+      <div className="grid grid-cols-3 gap-3 mb-6">
+        <div className={`${card} border rounded-2xl p-3 text-center`}>
+          <p className={`${text} text-2xl font-bold`}>{wardrobe.length}</p>
+          <p className={`${textFaint} text-xs`}>Total Items</p>
+        </div>
+        <div className={`${card} border rounded-2xl p-3 text-center`}>
+          <p className="text-green-500 text-2xl font-bold">
+            {wardrobe.filter((i) => (i.tags?.sustainabilityScore || 0) >= 4).length}
+          </p>
+          <p className={`${textFaint} text-xs`}>Eco Items</p>
+        </div>
+        <div className={`${card} border rounded-2xl p-3 text-center`}>
+          <p className="text-blue-400 text-2xl font-bold">
+            {wardrobe.filter((i) => !i.last_worn_date).length}
+          </p>
+          <p className={`${textFaint} text-xs`}>Unworn</p>
+        </div>
+      </div>
+
+      {/* Add Item Button */}
+      <button
+        onClick={() => fileRef.current?.click()}
+        className={`w-full ${addBtn} font-bold py-4 rounded-2xl mb-4 flex items-center justify-center gap-2 transition-all`}
+      >
+        <span className="text-xl">📸</span> Add Wardrobe Item
+      </button>
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        className="hidden"
+        onChange={handlePhotoSelect}
+      />
+
+      {/* Scanning state */}
+      {scanning && (
+        <div className={`${card} backdrop-blur-md border rounded-3xl p-6 mb-4 text-center`}>
+          <div className="text-4xl mb-3 animate-bounce">🔍</div>
+          <p className={`${text} font-medium`}>Analyzing your item...</p>
+          <p className={`${textFaint} text-sm mt-1`}>Detecting category, warmth, sustainability & more</p>
+        </div>
+      )}
+
+      {/* Tabs */}
+      <div className="flex gap-2 mb-4">
+        <button
+          onClick={() => setActiveTab("wardrobe")}
+          className={`flex-1 py-2 rounded-xl text-sm font-medium transition-all ${activeTab === "wardrobe" ? tabActive : tabInactive}`}
+        >
+          👗 Wardrobe
+        </button>
+        <button
+          onClick={handleInsightsTab}
+          className={`flex-1 py-2 rounded-xl text-sm font-medium transition-all ${activeTab === "insights" ? tabActive : tabInactive}`}
+        >
+          📊 Insights
+        </button>
+      </div>
+
+      {/* ── WARDROBE TAB ── */}
+      {activeTab === "wardrobe" && (
+        Object.keys(groupedWardrobe).length > 0 ? (
+          <div className="space-y-6">
+            {Object.entries(groupedWardrobe).map(([category, items]) => (
+              <div key={category}>
+                <p className={`${textMuted} text-sm font-medium mb-3 capitalize`}>
+                  {categoryEmoji(category)} {category}
+                </p>
+                <div className="grid grid-cols-2 gap-3">
+                  {items.map((item) => (
+                    <button
+                      key={item.item_id || item.id}
+                      onClick={() => setSelectedItem(item)}
+                      className={`${card} border rounded-2xl p-3 text-left hover:opacity-80 transition-all`}
+                    >
+                      {item.image_url ? (
+                        <img
+                          src={item.image_url}
+                          alt={item.name}
+                          className="w-full h-28 object-cover rounded-xl mb-2"
+                        />
+                      ) : (
+                        <div className={`w-full h-28 ${cardInner} rounded-xl mb-2 flex items-center justify-center text-3xl`}>
+                          {categoryEmoji(item.category)}
+                        </div>
+                      )}
+                      <p className={`${text} text-sm font-medium truncate`}>{item.name}</p>
+                      <p className={`${textFaint} text-xs capitalize`}>{item.tags?.color}</p>
+                      <div className="flex justify-between mt-1">
+                        {item.tags?.sustainabilityScore && (
+                          <span className={`text-xs ${sustainabilityColor(item.tags.sustainabilityScore)}`}>
+                            ♻️ {item.tags.sustainabilityScore}/5
+                          </span>
+                        )}
+                        <span className={`${textFaint} text-xs`}>
+                          {item.times_worn ?? 0}x worn
+                        </span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="text-center py-12">
+            <div className="text-6xl mb-4">👗</div>
+            <p className={`${text} font-medium`}>No items yet</p>
+            <p className={`${textFaint} text-sm mt-1`}>Tap the button above to add your first item</p>
+          </div>
+        )
+      )}
+
+      {/* ── INSIGHTS TAB ── */}
+      {activeTab === "insights" && (
+        <div className="space-y-4">
+          {/* Period toggle */}
+          <div className="flex gap-2">
+            {["week", "month"].map((p) => (
+              <button
+                key={p}
+                onClick={() => {
+                  setInsightsPeriod(p);
+                  loadInsights(p);
+                }}
+                className={`flex-1 py-2 rounded-xl text-sm font-medium capitalize transition-all ${
+                  insightsPeriod === p ? tabActive : tabInactive
+                }`}
+              >
+                This {p}
+              </button>
+            ))}
+          </div>
+
+          {insightsLoading && (
+            <div className={`${card} border rounded-3xl p-8 text-center`}>
+              <div className="text-4xl mb-3 animate-bounce">📊</div>
+              <p className={`${text} font-medium`}>Loading insights...</p>
+            </div>
+          )}
+
+          {!insightsLoading && insights && (
+            <>
+              {/* Summary */}
+              <div className={`${card} border rounded-2xl p-4`}>
+                <p className={`${text} font-medium mb-1`}>Summary</p>
+                <p className={`${textMuted} text-sm`}>{insights.summary}</p>
+                <p className={`${textFaint} text-xs mt-2`}>
+                  {insights.from} → {insights.to} • {insights.total_wears} total wears
+                </p>
+              </div>
+
+              {/* Item list sorted by times worn */}
+              <div className={`${card} border rounded-2xl p-4`}>
+                <p className={`${text} font-medium mb-3`}>Item Utilization</p>
+                <div className="space-y-3">
+                  {[...insights.items]
+                    .sort((a, b) => a.times_worn - b.times_worn)
+                    .map((item) => (
+                      <div key={item.item_id} className="flex items-center justify-between">
+                        <div className="flex-1">
+                          <p className={`${text} text-sm font-medium`}>{item.name}</p>
+                          <p className={`${textFaint} text-xs`}>
+                            Last worn: {item.last_worn_date || "Never"}
+                          </p>
+                        </div>
+                        <div className="text-right ml-3">
+                          <p className={`${item.times_worn === 0 ? "text-red-400" : item.times_worn < 3 ? "text-yellow-400" : "text-green-400"} font-bold text-sm`}>
+                            {item.times_worn}x
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ── SCAN CONFIRM MODAL ── */}
+      {scanResult && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-end justify-center p-4">
+          <div className={`${modalBg} border ${isDark ? "border-white/20" : "border-black/10"} rounded-3xl p-5 w-full max-w-md max-h-[85vh] overflow-y-auto`}>
+            <h3 className={`${text} text-lg font-bold mb-1`}>Confirm Item</h3>
+            <p className={`${textMuted} text-sm mb-4`}>Review and edit before saving</p>
+
+            {scanResult.image_url && (
+              <img
+                src={scanResult.image_url}
+                alt="scanned item"
+                className="w-full h-48 object-cover rounded-2xl mb-4"
+              />
+            )}
+
+            {/* Editable name */}
+            <div className="mb-3">
+              <p className={`${textFaint} text-xs mb-1`}>Name</p>
+              <input
+                className={`w-full ${cardInner} border ${isDark ? "border-white/20" : "border-black/20"} rounded-xl px-3 py-2 ${text} text-sm focus:outline-none`}
+                value={scanResult.editName}
+                onChange={(e) => setScanResult((p) => ({ ...p, editName: e.target.value }))}
+              />
+            </div>
+
+            {/* Detected attributes */}
+            <div className="grid grid-cols-2 gap-2 mb-4">
+              <div className={`${cardInner} rounded-xl p-3`}>
+                <p className={`${textFaint} text-xs`}>Category</p>
+                <p className={`${text} text-sm font-medium capitalize`}>{scanResult.category}</p>
+              </div>
+              <div className={`${cardInner} rounded-xl p-3`}>
+                <p className={`${textFaint} text-xs`}>Color</p>
+                <p className={`${text} text-sm font-medium capitalize`}>{scanResult.tags?.color}</p>
+              </div>
+              <div className={`${cardInner} rounded-xl p-3`}>
+                <p className={`${textFaint} text-xs`}>Warmth</p>
+                <p className={`${text} text-sm font-medium`}>{"🔥".repeat(scanResult.tags?.warmth || 1)}</p>
+              </div>
+              <div className={`${cardInner} rounded-xl p-3`}>
+                <p className={`${textFaint} text-xs`}>Waterproof</p>
+                <p className={`${text} text-sm font-medium`}>{scanResult.tags?.waterproof ? "✅ Yes" : "❌ No"}</p>
+              </div>
+              {scanResult.tags?.sustainabilityScore && (
+                <div className={`${cardInner} rounded-xl p-3`}>
+                  <p className={`${textFaint} text-xs`}>Sustainability</p>
+                  <p className={`font-medium text-sm ${sustainabilityColor(scanResult.tags.sustainabilityScore)}`}>
+                    {scanResult.tags.sustainabilityScore}/5
+                  </p>
+                </div>
+              )}
+              <div className={`${cardInner} rounded-xl p-3`}>
+                <p className={`${textFaint} text-xs`}>Confidence</p>
+                <p className={`${text} text-sm font-medium`}>{Math.round((scanResult.confidence || 0) * 100)}%</p>
+              </div>
+            </div>
+
+            {/* User comfort rating */}
+            <div className="mb-4">
+              <p className={`${textFaint} text-xs mb-2`}>How comfortable is this item? (1–5)</p>
+              <div className="flex gap-2">
+                {[1, 2, 3, 4, 5].map((n) => (
+                  <button
+                    key={n}
+                    onClick={() => setScanResult((p) => ({ ...p, editComfort: n }))}
+                    className={`flex-1 py-2 rounded-xl text-sm font-bold transition-all ${
+                      scanResult.editComfort === n
+                        ? isDark ? "bg-white text-blue-900" : "bg-gray-900 text-white"
+                        : cardInner + " " + text
+                    }`}
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Description */}
+            {scanResult.description && (
+              <div className={`${cardInner} rounded-xl p-3 mb-4`}>
+                <p className={`${textFaint} text-xs mb-1`}>Description</p>
+                <p className={`${textMuted} text-sm`}>{scanResult.description}</p>
+              </div>
+            )}
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setScanResult(null)}
+                className={`flex-1 ${closeBtn} py-3 rounded-2xl font-medium text-sm`}
+              >
+                Discard
+              </button>
+              <button
+                onClick={handleConfirmScan}
+                disabled={saving}
+                className={`flex-1 ${isDark ? "bg-white text-blue-900" : "bg-gray-900 text-white"} py-3 rounded-2xl font-bold text-sm disabled:opacity-40`}
+              >
+                {saving ? "Saving..." : "Save to Wardrobe"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── ITEM DETAIL MODAL ── */}
+      {selectedItem && (
+        <div
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-end justify-center p-4"
+          onClick={() => setSelectedItem(null)}
+        >
+          <div
+            className={`${modalBg} border ${isDark ? "border-white/20" : "border-black/10"} rounded-3xl p-5 w-full max-w-md max-h-[85vh] overflow-y-auto`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {selectedItem.image_url && (
+              <img
+                src={selectedItem.image_url}
+                alt={selectedItem.name}
+                className="w-full h-56 object-cover rounded-2xl mb-4"
+              />
+            )}
+            <h3 className={`${text} text-xl font-bold mb-1`}>{selectedItem.name}</h3>
+            <p className={`${textFaint} text-sm capitalize mb-1`}>
+              {selectedItem.category} • {selectedItem.tags?.color}
+            </p>
+            {selectedItem.description && (
+              <p className={`${textMuted} text-sm mb-4`}>{selectedItem.description}</p>
+            )}
+
+            <div className="grid grid-cols-2 gap-3 mb-4">
+              <div className={`${cardInner} rounded-xl p-3`}>
+                <p className={`${textFaint} text-xs`}>Warmth</p>
+                <p className={`${text} font-medium`}>{"🔥".repeat(selectedItem.tags?.warmth || 1)}</p>
+              </div>
+              <div className={`${cardInner} rounded-xl p-3`}>
+                <p className={`${textFaint} text-xs`}>Breathability</p>
+                <p className={`${text} font-medium`}>{"💨".repeat(selectedItem.tags?.breathability || 1)}</p>
+              </div>
+              <div className={`${cardInner} rounded-xl p-3`}>
+                <p className={`${textFaint} text-xs`}>Waterproof</p>
+                <p className={`${text} font-medium`}>{selectedItem.tags?.waterproof ? "✅ Yes" : "❌ No"}</p>
+              </div>
+              <div className={`${cardInner} rounded-xl p-3`}>
+                <p className={`${textFaint} text-xs`}>Comfort</p>
+                <p className={`${text} font-medium`}>{selectedItem.tags?.user_comfort || "—"}/5</p>
+              </div>
+            </div>
+
+            {selectedItem.tags?.occasion?.length > 0 && (
+              <div className={`${cardInner} rounded-xl p-3 mb-4`}>
+                <p className={`${textFaint} text-xs mb-1`}>Occasions</p>
+                <div className="flex flex-wrap gap-2">
+                  {selectedItem.tags.occasion.map((o) => (
+                    <span key={o} className={`${cardInner} ${text} text-xs px-2 py-1 rounded-full capitalize`}>{o}</span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="flex gap-3 mt-2">
+              <button
+                onClick={() => handleDelete(selectedItem.item_id || selectedItem.id)}
+                disabled={deleting === (selectedItem.item_id || selectedItem.id)}
+                className="flex-1 bg-red-500/20 border border-red-400/30 text-red-400 py-3 rounded-2xl font-medium text-sm disabled:opacity-40"
+              >
+                {deleting ? "Deleting..." : "🗑️ Remove"}
+              </button>
+              <button
+                onClick={() => setSelectedItem(null)}
+                className={`flex-1 ${closeBtn} py-3 rounded-2xl font-medium text-sm`}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
