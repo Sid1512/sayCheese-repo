@@ -1,9 +1,0 @@
-node_modules
-.env
-.env.*
-!.env.example
-serviceAccountKey.json
-*.log
-.git
-.gitignore
-README.md

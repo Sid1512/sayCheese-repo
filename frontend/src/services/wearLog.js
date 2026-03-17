@@ -17,3 +17,6 @@ export async function getWearLog({ from, to, item_id } = {}) {
   const qs = query.toString();
   return await api.get(`/wear-log${qs ? `?${qs}` : ""}`);
 }
+export async function removeItemFromLog(logId, itemId) {
+  return await api.patch(`/wear-log/${logId}/remove-item`, { item_id: itemId });
+}

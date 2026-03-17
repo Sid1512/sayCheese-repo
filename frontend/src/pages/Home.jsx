@@ -7,12 +7,6 @@ import { logWear } from "../services/wearLog";
 import { useTheme } from "../App";
 
 const OCCASIONS = ["casual", "work", "gym", "party"];
-const MOODS = [
-  { value: "confident", emoji: "💪", label: "Confident" },
-  { value: "relaxed", emoji: "😌", label: "Relaxed" },
-  { value: "energised", emoji: "⚡", label: "Energised" },
-];
-
 const OCCASION_LABELS = {
   casual: "Casual",
   work: "Work",
@@ -31,17 +25,18 @@ export default function Home() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [occasion, setOccasion] = useState("casual");
-  const [mood, setMood] = useState("relaxed");
   const [homeStateHydrated, setHomeStateHydrated] = useState(false);
   const [recommendation, setRecommendation] = useState(null);
   const [selectedOutfit, setSelectedOutfit] = useState({
-    top: null,
+    top_inner: null,
+    top_outer: null,
     bottom: null,
     footwear: null,
     optional: null,
   });
   const [clearedSlots, setClearedSlots] = useState({
-    top: false,
+    top_inner: false,
+    top_outer: false,
     bottom: false,
     footwear: false,
   });
@@ -68,7 +63,6 @@ export default function Home() {
           waterproof: tags?.waterproof ?? null,
           occasion: Array.isArray(tags?.occasion) ? [...tags.occasion].sort() : [],
           color: tags?.color ?? "",
-          user_comfort: tags?.user_comfort ?? null,
           last_worn_date: item?.last_worn_date || null,
           times_worn_last_30_days: item?.times_worn_last_30_days ?? null,
         });
@@ -83,10 +77,9 @@ export default function Home() {
         user_id: user?.user_id || user?.id || "anonymous",
         date: todayDate,
         occasion,
-        mood,
         wardrobe_signature: wardrobeSignature,
       }),
-    [user?.user_id, user?.id, todayDate, occasion, mood, wardrobeSignature]
+    [user?.user_id, user?.id, todayDate, occasion, wardrobeSignature]
   );
 
   const text = isDark ? "text-white" : "text-gray-900";
@@ -111,9 +104,6 @@ export default function Home() {
       if (saved?.occasion && OCCASIONS.includes(saved.occasion)) {
         setOccasion(saved.occasion);
       }
-      if (saved?.mood && MOODS.some((m) => m.value === saved.mood)) {
-        setMood(saved.mood);
-      }
     } catch {
       // ignore malformed local data
     } finally {
@@ -125,12 +115,9 @@ export default function Home() {
     if (!homeStateHydrated) return;
     localStorage.setItem(
       HOME_STATE_KEY,
-      JSON.stringify({
-        occasion,
-        mood,
-      })
+      JSON.stringify({ occasion })
     );
-  }, [occasion, mood, homeStateHydrated]);
+  }, [occasion, homeStateHydrated]);
 
   useEffect(() => {
     if (!homeStateHydrated) return;
@@ -149,11 +136,10 @@ export default function Home() {
       if (
         saved?.date === locationDate(weather?.current?.time, weather?.timezone) &&
         saved?.occasion === occasion &&
-        saved?.mood === mood &&
         saved?.selectedOutfit
       ) {
         setSelectedOutfit(saved.selectedOutfit);
-        setClearedSlots(saved.clearedSlots || { top: false, bottom: false, footwear: false });
+        setClearedSlots(saved.clearedSlots || { top_inner: false, top_outer: false, bottom: false, footwear: false });
       }
     } catch {
       // ignore malformed local data
@@ -161,14 +147,14 @@ export default function Home() {
       setSelectedOutfitHydrated(true);
     }
 
-    // Restore manual picks (independent of date/occasion/mood)
+    // Restore manual picks (independent of date/occasion)
     try {
       const rawPicks = localStorage.getItem(MANUAL_PICKS_KEY);
       if (rawPicks) setManualPicks(JSON.parse(rawPicks));
     } catch {
       // ignore
     }
-  }, [occasion, mood]);
+  }, [occasion]);
 
   // Track which recommendation_id we last applied so we can tell when a fresh one arrives.
   const [appliedRecId, setAppliedRecId] = useState(null);
@@ -180,8 +166,8 @@ export default function Home() {
 
     setSelectedOutfit((prev) => ({
       // Manual picks always win. If user cleared a slot, keep it cleared.
-      // For new recommendations, fall back to what the LLM suggested.
-      top: clearedSlots.top ? null : (manualPicks.top || (isNewRec ? recommendation.outfit.top || null : prev.top || recommendation.outfit.top || null)),
+      top_inner: clearedSlots.top_inner ? null : (manualPicks.top_inner || (isNewRec ? recommendation.outfit.top_inner || null : prev.top_inner || recommendation.outfit.top_inner || null)),
+      top_outer: clearedSlots.top_outer ? null : (manualPicks.top_outer || (isNewRec ? recommendation.outfit.top_outer || null : prev.top_outer || recommendation.outfit.top_outer || null)),
       bottom: clearedSlots.bottom ? null : (manualPicks.bottom || (isNewRec ? recommendation.outfit.bottom || null : prev.bottom || recommendation.outfit.bottom || null)),
       footwear: clearedSlots.footwear ? null : (manualPicks.footwear || (isNewRec ? recommendation.outfit.footwear || null : prev.footwear || recommendation.outfit.footwear || null)),
       optional: manualPicks.optional || (isNewRec ? (recommendation.outfit.optional || []) : (prev.optional !== null ? prev.optional : (recommendation.outfit.optional || []))),
@@ -259,12 +245,11 @@ export default function Home() {
       JSON.stringify({
         date: locationDate(weather?.current?.time, weather?.timezone),
         occasion,
-        mood,
         selectedOutfit,
         clearedSlots,
       })
     );
-  }, [selectedOutfit, clearedSlots, occasion, mood, selectedOutfitHydrated]);
+  }, [selectedOutfit, clearedSlots, occasion, selectedOutfitHydrated]);
 
   async function fetchRecommendation() {
     const cachedRaw = localStorage.getItem(RECOMMENDATION_CACHE_KEY);
@@ -286,7 +271,6 @@ export default function Home() {
     try {
       const rec = await getRecommendation({
         activity: occasion,
-        mood,
         location: location
           ? { lat: location.lat, lon: location.lon }
           : undefined,
@@ -316,7 +300,8 @@ export default function Home() {
         ? selectedOutfit.optional
         : (selectedOutfit.optional === null ? (recommendation.outfit?.optional || []) : []);
       const itemIds = [
-        selectedOutfit.top?.item_id || selectedOutfit.top?.id,
+        selectedOutfit.top_inner?.item_id || selectedOutfit.top_inner?.id,
+        selectedOutfit.top_outer?.item_id || selectedOutfit.top_outer?.id,
         selectedOutfit.bottom?.item_id || selectedOutfit.bottom?.id,
         selectedOutfit.footwear?.item_id || selectedOutfit.footwear?.id,
         ...optionalItems.map((o) => o?.item_id || o?.id),
@@ -356,8 +341,9 @@ export default function Home() {
 
   const greeting = (() => {
     // current.time is e.g. "2026-03-01T14:30" — already local to the location
+    // Parse hour directly from the string to avoid UTC conversion by Date constructor
     const hour = weather?.current?.time
-      ? new Date(weather.current.time).getHours()
+      ? parseInt(weather.current.time.split("T")[1]?.slice(0, 2) || "12", 10)
       : new Date(new Date().toLocaleString("en-US", { timeZone: weather?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone })).getHours();
     if (hour >= 5 && hour < 12) return "Good morning";
     if (hour >= 12 && hour < 17) return "Good afternoon";
@@ -480,9 +466,10 @@ export default function Home() {
 
   const outfitSlots = recommendation?.outfit
     ? [
-        { key: "top", label: "Top", item: resolveOutfitItem(selectedOutfit.top || recommendation.outfit.top) },
-        { key: "bottom", label: "Bottom", item: resolveOutfitItem(selectedOutfit.bottom || recommendation.outfit.bottom) },
-        { key: "footwear", label: "Footwear", item: resolveOutfitItem(selectedOutfit.footwear || recommendation.outfit.footwear) },
+        { key: "top_outer", label: "Top Outer Layer", item: resolveOutfitItem(selectedOutfit.top_outer || recommendation.outfit.top_outer), optional: true },
+        { key: "top_inner", label: "Top Inner Layer", item: resolveOutfitItem(selectedOutfit.top_inner || recommendation.outfit.top_inner), optional: false },
+        { key: "bottom", label: "Bottom", item: resolveOutfitItem(selectedOutfit.bottom || recommendation.outfit.bottom), optional: false },
+        { key: "footwear", label: "Footwear", item: resolveOutfitItem(selectedOutfit.footwear || recommendation.outfit.footwear), optional: false },
       ].filter((s) => s.item)
     : [];
   const visibleOutfitSlots = outfitSlots.filter((slot) => !clearedSlots[slot.key]);
@@ -500,6 +487,7 @@ export default function Home() {
   const optionalItems = selectedOutfit.optional?.length
     ? selectedOutfit.optional
     : (selectedOutfit.optional === null ? (recommendation?.outfit?.optional || []) : []);
+  const accessories = recommendation?.accessories || [];
 
   function openWardrobePicker(slot) {
     navigate(`/wardrobe?pick=${slot}&returnTo=%2F`);
@@ -515,9 +503,10 @@ export default function Home() {
           <h1 className={`${text} text-2xl font-bold`}>{user?.name} 👋</h1>
         </div>
         <p className={`${textFaint} text-xs text-right mt-1`}>
-          {weather?.current?.time
-            ? new Date(weather.current.time).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" })
-            : new Date().toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric", timeZone: weather?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone })}
+          {(() => {
+              const d = new Date((todayDate || new Date().toISOString().slice(0, 10)) + "T12:00:00Z");
+              return d.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric", timeZone: "UTC" });
+            })()}
         </p>
       </div>
 
@@ -587,8 +576,8 @@ export default function Home() {
               onClick={() => {
                 setOccasion(o);
                 setRecommendation(null);
-                setSelectedOutfit({ top: null, bottom: null, footwear: null, optional: null });
-                setClearedSlots({ top: false, bottom: false, footwear: false });
+                setSelectedOutfit({ top_inner: null, top_outer: null, bottom: null, footwear: null, optional: null });
+                setClearedSlots({ top_inner: false, top_outer: false, bottom: false, footwear: false });
                 setManualPicks({});
                 localStorage.removeItem(MANUAL_PICKS_KEY);
                 setWearLogged(false);
@@ -598,33 +587,6 @@ export default function Home() {
               }`}
             >
               {OCCASION_LABELS[o]}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Mood Selector */}
-      <div className="mb-4">
-        <p className={`${textMuted} text-sm mb-2`}>How do you want to feel today?</p>
-        <div className="grid grid-cols-3 gap-2">
-          {MOODS.map((m) => (
-            <button
-              key={m.value}
-              onClick={() => {
-                setMood(m.value);
-                setRecommendation(null);
-                setSelectedOutfit({ top: null, bottom: null, footwear: null, optional: null });
-                setClearedSlots({ top: false, bottom: false, footwear: false });
-                setManualPicks({});
-                localStorage.removeItem(MANUAL_PICKS_KEY);
-                setWearLogged(false);
-              }}
-              className={`py-3 rounded-2xl border text-sm font-medium transition-all flex flex-col items-center gap-1 ${
-                mood === m.value ? pill : pillInactive
-              }`}
-            >
-              <span className="text-xl">{m.emoji}</span>
-              <span>{m.label}</span>
             </button>
           ))}
         </div>
@@ -651,7 +613,7 @@ export default function Home() {
           <div className="text-4xl mb-3 animate-bounce">🤔</div>
           <p className={`${text} font-medium`}>Building your outfit...</p>
           <p className={`${textFaint} text-sm mt-1`}>
-            Matching {OCCASION_LABELS[occasion]} • {MOODS.find(m => m.value === mood)?.label} mood
+            Matching {OCCASION_LABELS[occasion]}
           </p>
         </div>
       )}
@@ -664,10 +626,10 @@ export default function Home() {
           <div className={`${card} backdrop-blur-md border rounded-3xl p-5`}>
             <div className="space-y-2">
               <p className={`${textMuted} text-xs mb-1`}>
-                {OCCASION_LABELS[occasion]} • {MOODS.find(m => m.value === mood)?.emoji} {MOODS.find(m => m.value === mood)?.label}
+                {OCCASION_LABELS[occasion]}
               </p>
 
-              {/* Non-negotiable slots */}
+              {/* Outfit slots */}
               {visibleOutfitSlots.map((slot) => (
                 <div key={slot.key} className={`${cardInner} rounded-xl p-2`}>
                   <div className="flex items-start gap-3">
@@ -679,11 +641,16 @@ export default function Home() {
                       />
                     ) : (
                       <div className={`w-16 h-16 rounded-lg flex items-center justify-center text-xl ${isDark ? "bg-white/10 text-white/60" : "bg-black/10 text-gray-500"}`}>
-                        👕
+                        {slot.key === "footwear" ? "👟" : slot.key === "bottom" ? "👖" : slot.key === "top_outer" ? "🧥" : "👕"}
                       </div>
                     )}
                     <div className="min-w-0 flex-1">
-                      <p className={`${textFaint} text-xs`}>{slot.label}</p>
+                      <div className="flex items-center gap-2">
+                        <p className={`${textFaint} text-xs`}>{slot.label}</p>
+                        {slot.optional && (
+                          <span className={`text-xs px-1.5 py-0.5 rounded-full ${isDark ? "bg-white/10 text-white/50" : "bg-black/10 text-gray-500"}`}>optional</span>
+                        )}
+                      </div>
                       <p className={`${text} text-sm font-medium truncate`}>{slot.item.name}</p>
                       {slot.item.reason && (
                         <p className={`${textFaint} text-xs italic mt-0.5`}>{slot.item.reason}</p>
@@ -714,14 +681,16 @@ export default function Home() {
                   </div>
                 ))}
 
-              {/* Optional items */}
-              {(optionalItems.length > 0 || recommendation?.outfit) && (
+              {/* Also Consider — wardrobe optional items + AI accessory suggestions */}
+              {(optionalItems.length > 0 || accessories.length > 0) && (
                 <div>
-                  <p className={`${textFaint} text-xs mb-1 mt-2`}>Also consider</p>
+                  <p className={`${textFaint} text-xs mb-2 mt-3`}>Also Consider</p>
+
+                  {/* Wardrobe optional items (scarf, jacket, etc.) */}
                   {optionalItems.map((rawItem, i) => {
                     const item = resolveOutfitItem(rawItem);
                     return (
-                      <div key={i} className={`${cardInner} rounded-xl p-2 mb-1 border ${isDark ? "border-white/10" : "border-black/10"}`}>
+                      <div key={`opt-${i}`} className={`${cardInner} rounded-xl p-2 mb-1 border ${isDark ? "border-white/10" : "border-black/10"}`}>
                         <div className="flex items-start gap-3">
                           {getItemImage(item) ? (
                             <img
@@ -735,6 +704,7 @@ export default function Home() {
                             </div>
                           )}
                           <div className="min-w-0 flex-1">
+                            <p className={`${textFaint} text-xs`}>From your wardrobe</p>
                             <p className={`${text} text-sm font-medium truncate`}>{item?.name}</p>
                             {item?.reason && (
                               <p className={`${textFaint} text-xs italic mt-0.5`}>{item.reason}</p>
@@ -744,11 +714,31 @@ export default function Home() {
                       </div>
                     );
                   })}
+
+                  {/* AI-suggested accessories (sunglasses, umbrella, etc.) */}
+                  {accessories.map((acc, i) => (
+                    <div key={`acc-${i}`} className={`${cardInner} rounded-xl p-2 mb-1 border ${isDark ? "border-white/10" : "border-black/10"}`}>
+                      <div className="flex items-center gap-3">
+                        <div className={`w-14 h-14 rounded-lg flex items-center justify-center text-xl ${isDark ? "bg-white/10 text-white/60" : "bg-black/10 text-gray-500"}`}>
+                          {acc.toLowerCase().includes("umbrella") ? "☂️" :
+                           acc.toLowerCase().includes("sunglass") ? "🕶️" :
+                           acc.toLowerCase().includes("scarf") ? "🧣" :
+                           acc.toLowerCase().includes("hat") || acc.toLowerCase().includes("cap") ? "🧢" :
+                           acc.toLowerCase().includes("glove") ? "🧤" : "✨"}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className={`${textFaint} text-xs`}>Accessory suggestion</p>
+                          <p className={`${text} text-sm font-medium`}>{acc}</p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+
                   <button
                     onClick={() => openWardrobePicker("optional")}
                     className={`mt-1 text-xs px-2 py-1 rounded-lg ${isDark ? "bg-white/10 text-white" : "bg-black/10 text-gray-700"}`}
                   >
-                    Choose optional from wardrobe
+                    Choose from wardrobe
                   </button>
                 </div>
               )}
@@ -900,13 +890,7 @@ export default function Home() {
             <div className="space-y-3">
               {recommendation.activities.map((activity, i) => {
                 const icons = ["🏃", "☕", "📚", "🌿", "🎨", "🎵", "🧘", "🚴"];
-                const moodIcons = {
-                  energised: ["🏃", "🚴", "🧗", "⚽"],
-                  relaxed:   ["☕", "📚", "🌿", "🧘"],
-                  confident: ["🎨", "🎵", "🍽️", "🛍️"],
-                };
-                const moodSet = moodIcons[mood] || icons;
-                const icon = moodSet[i] || icons[i % icons.length];
+                const icon = icons[i % icons.length];
                 return (
                   <div key={i} className={`flex items-center gap-3 ${cardInner} rounded-2xl px-4 py-3`}>
                     <span className="text-2xl">{icon}</span>
@@ -932,12 +916,20 @@ export default function Home() {
         </div>
       )}
 
-      {/* Empty wardrobe state */}
+      {/* Empty wardrobe nudge */}
       {!loading && !recommendation && wardrobe.length === 0 && (
         <div className={`${card} backdrop-blur-md border rounded-3xl p-8 text-center`}>
           <div className="text-5xl mb-3">👗</div>
           <p className={`${text} font-medium`}>Your wardrobe is empty</p>
-          <p className={`${textFaint} text-sm mt-1`}>Add items in your Profile to get outfit recommendations</p>
+          <p className={`${textFaint} text-sm mt-2 mb-5`}>
+            Scan your clothes to get personalised outfit recommendations based on weather and occasion.
+          </p>
+          <button
+            onClick={() => window.location.href = "/wardrobe"}
+            className={`px-6 py-3 rounded-2xl font-bold text-sm ${isDark ? "bg-white text-blue-900" : "bg-gray-900 text-white"}`}
+          >
+            📸 Scan Your First Item
+          </button>
         </div>
       )}
 

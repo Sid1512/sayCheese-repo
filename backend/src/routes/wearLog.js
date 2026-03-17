@@ -1,101 +1,114 @@
 const express = require('express');
 const { nanoid } = require('nanoid');
-const { getAdmin } = require('../config/firebase');
+const { getAdminClient } = require('../config/supabase');
 const { authMiddleware } = require('../middleware/auth');
-const { WEAR_LOGS, WARDROBE_ITEMS } = require('../config/collections');
 
 const router = express.Router();
-const db = () => getAdmin().firestore();
+const db = () => getAdminClient();
 
-/**
- * Recompute 7-day and 30-day wear counts from a wearHistory ring buffer stored on each item.
- * This avoids querying wear_logs just to update counters, and ensures they are always accurate
- * (no silent accumulation over time — counts reflect the actual rolling window).
- * @param {string[]} wearHistory - existing ring buffer of YYYY-MM-DD wear dates
- * @param {string} logDate - the date being logged now (YYYY-MM-DD)
- * @returns {{ timesWornLast7Days: number, timesWornLast30Days: number, wearHistory: string[] }}
- */
 function computeRollingCounts(wearHistory, logDate) {
-  // Prepend the new date; keep the last 60 entries max to bound document growth
   const all = [logDate, ...(Array.isArray(wearHistory) ? wearHistory : [])].slice(0, 60);
-
   const anchor = new Date(logDate + 'T12:00:00Z');
-  const cutoff7 = new Date(anchor);
-  cutoff7.setUTCDate(cutoff7.getUTCDate() - 6); // 7 days inclusive of today
-  const cutoff30 = new Date(anchor);
-  cutoff30.setUTCDate(cutoff30.getUTCDate() - 29); // 30 days inclusive of today
 
-  const fmt7 = cutoff7.toISOString().slice(0, 10);
-  const fmt30 = cutoff30.toISOString().slice(0, 10);
+  const cutoff7 = new Date(anchor);
+  cutoff7.setUTCDate(cutoff7.getUTCDate() - 6);
+  const cutoff30 = new Date(anchor);
+  cutoff30.setUTCDate(cutoff30.getUTCDate() - 29);
 
   return {
-    timesWornLast7Days: all.filter((d) => d >= fmt7).length,
-    timesWornLast30Days: all.filter((d) => d >= fmt30).length,
-    wearHistory: all,
+    times_worn_last_7_days: all.filter((d) => d >= cutoff7.toISOString().slice(0, 10)).length,
+    times_worn_last_30_days: all.filter((d) => d >= cutoff30.toISOString().slice(0, 10)).length,
+    wear_history: all,
   };
 }
 
+// POST /api/v1/wear-log
 router.post('/', authMiddleware, async (req, res) => {
   try {
     const userId = req.userId;
     const { date, activity, item_ids } = req.body || {};
+    const activityStr = activity ? String(activity).trim() : null;
     if (!Array.isArray(item_ids) || item_ids.length === 0) {
       return res.status(400).json({
         error: { code: 'VALIDATION_ERROR', message: 'item_ids is required', status: 400 },
       });
     }
 
-    const logId = `log_${nanoid(12)}`;
-    // Accept client-provided date (from locationDate()) or fall back to server UTC date
     const logDate = /^\d{4}-\d{2}-\d{2}$/.test(String(date || ''))
       ? String(date)
       : new Date().toISOString().slice(0, 10);
 
-    await db().collection(WEAR_LOGS).doc(logId).set({
-      userId,
-      date: logDate,
-      activity: activity ? String(activity) : null,
-      itemIds: item_ids.map(String),
-      createdAt: new Date().toISOString(),
-    });
+    const incomingIds = [...new Set(item_ids.map(String))];
 
-    // Best-effort wardrobe counter update.
-    // Fetch only the specific item docs being logged — not the entire wardrobe.
-    const uniqueIds = [...new Set(item_ids.map(String))];
-    const itemSnaps = await Promise.all(
-      uniqueIds.map((id) => db().collection(WARDROBE_ITEMS).doc(id).get())
-    );
+    // Check if a log already exists for this user + date
+    const { data: existing } = await db()
+      .from('wear_logs')
+      .select('id, item_ids, activities')
+      .eq('user_id', userId)
+      .eq('date', logDate)
+      .maybeSingle();
 
-    const batch = db().batch();
-    itemSnaps.forEach((snap) => {
-      if (!snap.exists) return;
-      const cur = snap.data() || {};
-      if (cur.userId !== userId) return; // ownership guard
+    let logId;
+    let newlyAddedIds; // only items not already logged today
 
-      const { timesWornLast7Days, timesWornLast30Days, wearHistory } =
-        computeRollingCounts(cur.wearHistory || [], logDate);
+    if (existing) {
+      // Merge — add only items not already in today's log
+      const alreadyLogged = new Set((existing.item_ids || []).map(String));
+      newlyAddedIds = incomingIds.filter((id) => !alreadyLogged.has(id));
+      const mergedIds = [...alreadyLogged, ...newlyAddedIds];
 
-      // Footwear can be repeated freely — don't track lastWornDate so it's
-      // never excluded by the recency filter in prefilter.js.
-      const isFootwear = cur.category === 'footwear';
-      const update = {
-        timesWornLast7Days,
-        timesWornLast30Days,
-        wearHistory,
-      };
-      if (!isFootwear) {
-        update.lastWornDate = logDate;
+      // Merge activities — add new occasion if not already in the list
+      const existingActivities = Array.isArray(existing.activities) ? existing.activities : [];
+      const mergedActivities = activityStr && !existingActivities.includes(activityStr)
+        ? [...existingActivities, activityStr]
+        : existingActivities;
+
+      const { error: updateErr } = await db()
+        .from('wear_logs')
+        .update({
+          item_ids: mergedIds,
+          activities: mergedActivities,
+        })
+        .eq('id', existing.id);
+      if (updateErr) throw new Error(updateErr.message);
+      logId = existing.id;
+    } else {
+      // New log entry for this date
+      newlyAddedIds = incomingIds;
+      logId = `log_${nanoid(12)}`;
+      const { error: insertErr } = await db().from('wear_logs').insert({
+        id: logId,
+        user_id: userId,
+        date: logDate,
+        activities: activityStr ? [activityStr] : [],
+        item_ids: incomingIds,
+        created_at: new Date().toISOString(),
+      });
+      if (insertErr) throw new Error(insertErr.message);
+    }
+
+    // Only update wear counts for newly added items (not already counted today)
+    if (newlyAddedIds.length > 0) {
+      const { data: items } = await db()
+        .from('wardrobe_items')
+        .select('id, category, wear_history')
+        .in('id', newlyAddedIds)
+        .eq('user_id', userId);
+
+      if (items && items.length > 0) {
+        await Promise.all(
+          items.map((item) => {
+            const { times_worn_last_7_days, times_worn_last_30_days, wear_history } =
+              computeRollingCounts(item.wear_history || [], logDate);
+            const update = { times_worn_last_7_days, times_worn_last_30_days, wear_history };
+            if (item.category !== 'footwear') update.last_worn_date = logDate;
+            return db().from('wardrobe_items').update(update).eq('id', item.id);
+          })
+        );
       }
+    }
 
-      batch.update(snap.ref, update);
-    });
-    await batch.commit();
-
-    return res.status(201).json({
-      log_id: logId,
-      date: logDate,
-      items_logged: item_ids.length,
-    });
+    return res.status(201).json({ log_id: logId, date: logDate, items_logged: incomingIds.length });
   } catch (err) {
     return res.status(500).json({
       error: { code: 'INTERNAL_ERROR', message: err.message || 'Failed to log wear', status: 500 },
@@ -103,6 +116,70 @@ router.post('/', authMiddleware, async (req, res) => {
   }
 });
 
+
+// PATCH /api/v1/wear-log/:log_id/remove-item
+// Removes a single item from a log entry. If no items remain, deletes the log entirely.
+router.patch('/:log_id/remove-item', authMiddleware, async (req, res) => {
+  try {
+    const userId = req.userId;
+    const logId = String(req.params.log_id || '');
+    const { item_id } = req.body || {};
+    if (!item_id) {
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'item_id is required', status: 400 } });
+    }
+
+    const { data: log, error: fetchErr } = await db()
+      .from('wear_logs').select('*').eq('id', logId).eq('user_id', userId).maybeSingle();
+    if (fetchErr || !log) {
+      return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Log entry not found', status: 404 } });
+    }
+
+    const remaining = (log.item_ids || []).filter((id) => String(id) !== String(item_id));
+
+    if (remaining.length === 0) {
+      // No items left — delete the whole log
+      await db().from('wear_logs').delete().eq('id', logId);
+    } else {
+      await db().from('wear_logs').update({ item_ids: remaining }).eq('id', logId);
+    }
+
+    // Recompute wear counts for the removed item from remaining logs
+    const { data: remainingLogs } = await db()
+      .from('wear_logs').select('item_ids, date').eq('user_id', userId);
+
+    const { data: itemData } = await db()
+      .from('wardrobe_items').select('id, category').eq('id', String(item_id)).eq('user_id', userId).maybeSingle();
+
+    if (itemData) {
+      const allDates = (remainingLogs || [])
+        .filter((l) => (l.item_ids || []).map(String).includes(String(item_id)))
+        .map((l) => l.date)
+        .sort((a, b) => b.localeCompare(a))
+        .slice(0, 60);
+
+      const today = new Date().toISOString().slice(0, 10);
+      const anchor = new Date(today + 'T12:00:00Z');
+      const cutoff7 = new Date(anchor); cutoff7.setUTCDate(cutoff7.getUTCDate() - 6);
+      const cutoff30 = new Date(anchor); cutoff30.setUTCDate(cutoff30.getUTCDate() - 29);
+
+      const update = {
+        wear_history: allDates,
+        times_worn_last_7_days: allDates.filter((d) => d >= cutoff7.toISOString().slice(0, 10)).length,
+        times_worn_last_30_days: allDates.filter((d) => d >= cutoff30.toISOString().slice(0, 10)).length,
+      };
+      if (itemData.category !== 'footwear') {
+        update.last_worn_date = allDates[0] || null;
+      }
+      await db().from('wardrobe_items').update(update).eq('id', itemData.id);
+    }
+
+    return res.status(200).json({ removed: item_id, log_id: logId, items_remaining: remaining.length });
+  } catch (err) {
+    return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message || 'Failed to remove item', status: 500 } });
+  }
+});
+
+// GET /api/v1/wear-log
 router.get('/', authMiddleware, async (req, res) => {
   try {
     const userId = req.userId;
@@ -110,40 +187,39 @@ router.get('/', authMiddleware, async (req, res) => {
     const to = req.query.to ? String(req.query.to) : null;
     const itemId = req.query.item_id ? String(req.query.item_id) : null;
 
-    let ref = db().collection(WEAR_LOGS).where('userId', '==', userId);
-    if (from) ref = ref.where('date', '>=', from);
-    if (to) ref = ref.where('date', '<=', to);
-    ref = ref.orderBy('date', 'desc');
+    let query = db()
+      .from('wear_logs')
+      .select('*')
+      .eq('user_id', userId)
+      .order('date', { ascending: false });
 
-    const logs = await ref.get();
-    const entries = logs.docs
-      .map((d) => ({ id: d.id, ...d.data() }))
-      .filter((e) => !itemId || (Array.isArray(e.itemIds) && e.itemIds.includes(itemId)));
+    if (from) query = query.gte('date', from);
+    if (to) query = query.lte('date', to);
 
-    // Resolve item names — fetch only the wardrobe items referenced in the returned entries
-    const referencedIds = [...new Set(entries.flatMap((e) => e.itemIds || []))];
+    const { data: logs, error } = await query;
+    if (error) throw new Error(error.message);
+
+    let entries = logs || [];
+    if (itemId) entries = entries.filter((e) => Array.isArray(e.item_ids) && e.item_ids.includes(itemId));
+
+    // Resolve item names
+    const referencedIds = [...new Set(entries.flatMap((e) => e.item_ids || []))];
     const names = new Map();
     if (referencedIds.length > 0) {
-      // Firestore 'in' supports up to 30 values; chunk if needed
-      const CHUNK = 30;
-      const admin = getAdmin();
-      for (let i = 0; i < referencedIds.length; i += CHUNK) {
-        const chunk = referencedIds.slice(i, i + CHUNK);
-        const snap = await db()
-          .collection(WARDROBE_ITEMS)
-          .where('userId', '==', userId)
-          .where(admin.firestore.FieldPath.documentId(), 'in', chunk)
-          .get();
-        snap.docs.forEach((d) => names.set(d.id, d.data().name || 'Item'));
-      }
+      const { data: wardrobeItems } = await db()
+        .from('wardrobe_items')
+        .select('id, name')
+        .eq('user_id', userId)
+        .in('id', referencedIds);
+      (wardrobeItems || []).forEach((w) => names.set(w.id, w.name || 'Item'));
     }
 
     return res.json({
       entries: entries.map((e) => ({
         log_id: e.id,
         date: e.date,
-        activity: e.activity || null,
-        items: (e.itemIds || []).map((id) => ({ item_id: id, name: names.get(id) || 'Item' })),
+        activities: Array.isArray(e.activities) ? e.activities : (e.activity ? [e.activity] : []),
+        items: (e.item_ids || []).map((id) => ({ item_id: id, name: names.get(id) || 'Item' })),
       })),
     });
   } catch (err) {

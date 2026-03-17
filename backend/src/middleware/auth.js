@@ -1,6 +1,6 @@
-const jwt = require('jsonwebtoken');
+const { getAdminClient } = require('../config/supabase');
 
-function authMiddleware(req, res, next) {
+async function authMiddleware(req, res, next) {
   const authHeader = req.headers.authorization;
   const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
   if (!token) {
@@ -8,15 +8,20 @@ function authMiddleware(req, res, next) {
       error: { code: 'UNAUTHORIZED', message: 'Missing or invalid token', status: 401 },
     });
   }
+
   try {
-    const secret = process.env.JWT_SECRET;
-    if (!secret) throw new Error('JWT_SECRET not set');
-    const decoded = jwt.verify(token, secret);
-    req.userId = decoded.sub;
+    // Verify the Supabase JWT by calling getUser — validates signature + expiry server-side
+    const { data, error } = await getAdminClient().auth.getUser(token);
+    if (error || !data?.user) {
+      return res.status(401).json({
+        error: { code: 'UNAUTHORIZED', message: 'Invalid or expired token', status: 401 },
+      });
+    }
+    req.userId = data.user.id; // Supabase user UUID
     next();
-  } catch {
+  } catch (err) {
     return res.status(401).json({
-      error: { code: 'UNAUTHORIZED', message: 'Invalid or expired token', status: 401 },
+      error: { code: 'UNAUTHORIZED', message: 'Token verification failed', status: 401 },
     });
   }
 }

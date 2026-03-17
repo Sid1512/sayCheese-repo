@@ -6,20 +6,14 @@ node_modules/
 dist/
 build/
 
-# Environment variables - NEVER commit these
+# Environment variables — never commit these
 .env
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
 
-# Firebase
-.firebase/
-firebase-debug.log
-firestore-debug.log
-ui-debug.log
-
-# Mac OS
+# macOS
 .DS_Store
 **/.DS_Store
 __MACOSX/

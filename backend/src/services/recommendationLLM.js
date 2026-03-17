@@ -1,6 +1,6 @@
 /**
  * Stage 2: LLM outfit selection from pre-filtered candidates.
- * Takes candidates + weather + activity + mood, returns outfit, explanation, alternatives, health_insights.
+ * Slots: top_inner (mandatory), top_outer (optional), bottom, footwear, accessories (text only).
  */
 
 const Anthropic = require('@anthropic-ai/sdk').default;
@@ -9,74 +9,86 @@ const SCHEMA = `
 Respond with exactly one JSON object (no markdown, no code fence) with this shape:
 {
   "outfit": {
-    "top": { "item_id": "itm_xxx", "name": "string", "reason": "one sentence" },
-    "bottom": { "item_id": "itm_xxx", "name": "string", "reason": "one sentence" },
-    "footwear": { "item_id": "itm_xxx", "name": "string", "reason": "one sentence" },
-    "optional": [ { "item_id": "itm_xxx", "name": "string", "reason": "one sentence" } ]
+    "top_inner": { "item_id": "itm_xxx", "name": "string", "reason": "one sentence" },
+    "top_outer": { "item_id": "itm_xxx", "name": "string", "reason": "one sentence" },
+    "bottom":    { "item_id": "itm_xxx", "name": "string", "reason": "one sentence" },
+    "footwear":  { "item_id": "itm_xxx", "name": "string", "reason": "one sentence" },
+    "optional":  [ { "item_id": "itm_xxx", "name": "string", "reason": "one sentence" } ]
   },
+  "accessories": [ "string" ],
   "explanation": "2-3 sentences for the user.",
-  "alternatives": [ { "replaces": "top" | "bottom" | "footwear", "item_id": "itm_xxx", "name": "string", "reason": "one sentence" } ],
+  "alternatives": [ { "replaces": "top_inner" | "top_outer" | "bottom" | "footwear", "item_id": "itm_xxx", "name": "string", "reason": "one sentence" } ],
   "health_insights": [ { "type": "thermal" | "uv" | "rain" | "activity" | "other", "severity": "info" | "warning", "message": "one sentence" } ],
   "activities": [ "string" ]
 }
+
 Rules:
-- CRITICAL: Always include exactly one top, one bottom, and one footwear in outfit when candidates exist for that slot. Never omit top, bottom, or footwear unless that slot has zero candidates. Pick exactly one item_id per slot from the candidates; use the item_id strings as given. Candidates are ordered with the best option first (e.g. warmest for cold weather when no ideal match existed).
-- If a slot has no candidates at all, omit that key from outfit (or use null). Still fill every other slot that has candidates.
-- optional: include 0+ items (e.g. jacket, scarf) only when weather or activity clearly need them.
-- alternatives: 0-3 items, each replaces one slot with another candidate from that slot.
-- health_insights: 0-4 short messages (thermal, UV, rain, activity-matched). If the best available item was not ideal for weather (e.g. no warm enough top), add a brief thermal/rain insight so the user knows.
-- activities: exactly 3-4 short activity suggestions (each under 10 words) tailored to the combination of weather, occasion, and mood. Examples: "Take a walk in the park", "Try a new coffee shop", "Catch up on reading indoors". Make them feel personal and specific — not generic. Vary them based on mood (energised = active; relaxed = calm; confident = social).
+- top_inner (MANDATORY): always pick one from candidates when they exist. This is the base layer (t-shirt, shirt, blouse).
+- top_outer (OPTIONAL): only include when weather is cold (feels_like < 16°C), rainy, or the occasion calls for it (work, party). Pick from top_outer candidates. Omit entirely in warm weather.
+- bottom (MANDATORY): always pick one from candidates when they exist.
+- footwear (MANDATORY): always pick one from candidates when they exist.
+- IMPORTANT for gym activity: the user is exercising indoors. Prioritise occasion match (athletic-tagged items) over warmth — they do not need warm clothing for the workout itself. Use accessories to handle the commute: suggest a warm outer layer if weather is cold, a waterproof outer layer if rainy, or both if cold and rainy.
+- optional: 0+ wardrobe items (thermal, jacket, scarf, etc.) when weather clearly needs them.
+- accessories: 0-3 short strings for weather-appropriate accessories the user might want regardless of their wardrobe. Examples: "Sunglasses (UV ${Math.round(0)} today)", "Umbrella recommended", "Light scarf for the evening chill". Only suggest when genuinely useful.
+- alternatives: 0-3 items swapping one slot for another candidate.
+- health_insights: 0-4 short messages.
+- activities: exactly 3-4 short suggestions (under 10 words each) tailored to weather + occasion.
 `;
 
-/**
- * @param {object} opts
- * @param {{ top: object[], bottom: object[], footwear: object[], optional: object[] }} opts.candidates - API-shaped items (item_id, name, description, tags, last_worn_date, etc.)
- * @param {object} [opts.weather] - { temperature_c, feels_like_c, condition, rain_probability, uv_index, humidity, wind_kph }
- * @param {string} [opts.activity] - e.g. casual, office, gym
- * @param {string} [opts.mood] - confident, relaxed, energised
- * @param {string} [opts.date] - YYYY-MM-DD
- * @returns {Promise<{ outfit: object, explanation: string, alternatives: array, health_insights: array }>}
- */
 async function recommendOutfit(opts) {
-  const { candidates, weather, activity, mood, date } = opts;
+  const { candidates, weather, activity, date } = opts;
   const apiKey = process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY;
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY or CLAUDE_API_KEY is required');
 
+  // Build candidate context for LLM
   const parts = [];
-  parts.push('Pre-filtered candidates by slot (item_id, name, description, tags, last_worn_date). Pick one per required slot and optionally from optional.');
+  parts.push('Pre-filtered wardrobe candidates by slot. Pick one per mandatory slot.');
   parts.push('');
-  ['top', 'bottom', 'footwear'].forEach((slot) => {
+
+  // Mandatory slots
+  for (const slot of ['top_inner', 'bottom', 'footwear']) {
     const list = candidates[slot] || [];
-    parts.push(`${slot}: ${list.length} items`);
+    parts.push(`${slot} (MANDATORY — ${list.length} candidates):`);
     list.forEach((it) => {
-      parts.push(`  - ${it.item_id}: ${it.name} | ${it.description || '-'} | warmth=${it.tags?.warmth ?? '-'} breathability=${it.tags?.breathability ?? '-'} waterproof=${it.tags?.waterproof ?? false} occasion=${JSON.stringify(it.tags?.occasion ?? [])} | last_worn: ${it.last_worn_date ?? 'never'}`);
+      parts.push(`  - ${it.item_id}: ${it.name} | ${it.description || '-'} | warmth=${it.tags?.warmth ?? '-'} breathability=${it.tags?.breathability ?? '-'} waterproof=${it.tags?.waterproof ?? false} occasion=${JSON.stringify(it.tags?.occasion ?? [])} layer=${it.layer ?? 'inner'} | last_worn: ${it.last_worn_date ?? 'never'}`);
     });
     parts.push('');
+  }
+
+  // Optional outer layer
+  const outerList = candidates.top_outer || [];
+  parts.push(`top_outer (OPTIONAL outer layer — ${outerList.length} candidates — only include if weather/occasion warrants):`);
+  outerList.forEach((it) => {
+    parts.push(`  - ${it.item_id}: ${it.name} | ${it.description || '-'} | warmth=${it.tags?.warmth ?? '-'} waterproof=${it.tags?.waterproof ?? false} | last_worn: ${it.last_worn_date ?? 'never'}`);
   });
-  parts.push('optional (jacket, scarf, etc.):');
-  (candidates.optional || []).forEach((it) => {
-    parts.push(`  - ${it.item_id}: ${it.name} | ${it.description || '-'} | warmth=${it.tags?.warmth ?? '-'} waterproof=${it.tags?.waterproof ?? false}`);
+  parts.push('');
+
+  // Weather accessories
+  const optList = candidates.optional || [];
+  parts.push(`optional accessories from wardrobe (scarves, hats, thermals, umbrellas, etc. — ${optList.length} candidates):`);
+  optList.forEach((it) => {
+    parts.push(`  - ${it.item_id}: ${it.name} | warmth=${it.tags?.warmth ?? '-'} waterproof=${it.tags?.waterproof ?? false}`);
   });
 
-  let context = `Activity: ${activity || 'casual'}. Mood: ${mood || 'relaxed'}. Date: ${date || 'today'}.`;
+  let context = `Activity: ${activity || 'casual'}. Date: ${date || 'today'}.`;
   if (weather) {
     context += ` Weather: ${weather.temperature_c}°C (feels like ${weather.feels_like_c}°C), ${weather.condition}, rain_probability=${weather.rain_probability}, humidity=${weather.humidity ?? '-'}, wind_kph=${weather.wind_kph ?? '-'}, uv_index=${weather.uv_index ?? '-'}.`;
   } else {
-    context += ' No weather data (no location provided).';
+    context += ' No weather data.';
   }
 
-  const counts = {
-    top: (candidates.top || []).length,
+  console.log('[recommendationLLM] candidates counts:', {
+    top_inner: (candidates.top_inner || []).length,
+    top_outer: (candidates.top_outer || []).length,
     bottom: (candidates.bottom || []).length,
     footwear: (candidates.footwear || []).length,
     optional: (candidates.optional || []).length,
-  };
-  console.log('[recommendationLLM] LLM call candidates:', counts);
+  });
 
   const anthropic = new Anthropic({ apiKey });
   const response = await anthropic.messages.create({
     model: 'claude-sonnet-4-20250514',
-    max_tokens: 1024,
+    max_tokens: 1200,
     messages: [
       {
         role: 'user',
@@ -106,12 +118,16 @@ async function recommendOutfit(opts) {
   const activities = Array.isArray(parsed.activities)
     ? parsed.activities.filter((a) => typeof a === 'string' && a.trim()).slice(0, 4)
     : [];
+  const accessories = Array.isArray(parsed.accessories)
+    ? parsed.accessories.filter((a) => typeof a === 'string' && a.trim()).slice(0, 3)
+    : [];
 
   const normalizedOutfit = enforceRequiredSlots(outfit, candidates, weather);
   const normalizedAlternatives = sanitizeAlternatives(alternatives, candidates);
 
   return {
     outfit: normalizedOutfit,
+    accessories,
     explanation,
     alternatives: normalizedAlternatives,
     health_insights,
@@ -119,53 +135,68 @@ async function recommendOutfit(opts) {
   };
 }
 
+/**
+ * Enforce mandatory slots are filled from candidates.
+ * top_outer is optional — only kept if LLM chose a valid candidate.
+ */
 function enforceRequiredSlots(outfit, candidates, weather) {
   const normalized = { ...(outfit || {}) };
 
-  ['top', 'bottom', 'footwear'].forEach((slot) => {
-    const slotCandidates = Array.isArray(candidates?.[slot]) ? candidates[slot] : [];
-    if (slotCandidates.length === 0) return;
+  // Mandatory slots — always fill if candidates exist
+  for (const slot of ['top_inner', 'bottom', 'footwear']) {
+    const slotCandidates = candidates?.[slot] || [];
+    if (slotCandidates.length === 0) continue;
 
     const selected = normalized[slot];
-    const selectedId = selected && typeof selected.item_id === 'string' ? selected.item_id : null;
-    const matched = selectedId
-      ? slotCandidates.find((it) => it.item_id === selectedId)
-      : null;
+    const selectedId = selected?.item_id ?? null;
+    const matched = selectedId ? slotCandidates.find((it) => it.item_id === selectedId) : null;
 
     if (matched) {
       normalized[slot] = {
         item_id: matched.item_id,
         name: matched.name,
-        reason:
-          typeof selected.reason === 'string' && selected.reason.trim()
-            ? selected.reason.trim()
-            : `Selected from your ${slot} options.`,
+        reason: selected.reason?.trim() || `Selected from your ${slot} options.`,
       };
-      return;
+    } else {
+      const fallback = selectBestCandidate(slotCandidates, weather, slot);
+      normalized[slot] = {
+        item_id: fallback.item_id,
+        name: fallback.name,
+        reason: `Best available ${slot} from your wardrobe.`,
+      };
     }
+  }
 
-    const fallback = selectBestCandidate(slotCandidates, weather, slot);
-    normalized[slot] = {
-      item_id: fallback.item_id,
-      name: fallback.name,
-      reason: `Best available ${slot} from your wardrobe.`,
-    };
-  });
+  // top_outer — optional, validate only if LLM included it
+  if (normalized.top_outer) {
+    const outerCandidates = candidates?.top_outer || [];
+    const selectedId = normalized.top_outer?.item_id ?? null;
+    const matched = selectedId ? outerCandidates.find((it) => it.item_id === selectedId) : null;
 
+    if (matched) {
+      normalized.top_outer = {
+        item_id: matched.item_id,
+        name: matched.name,
+        reason: normalized.top_outer.reason?.trim() || 'Outer layer for today.',
+      };
+    } else {
+      // LLM hallucinated an id — drop it
+      delete normalized.top_outer;
+    }
+  }
+
+  // optional wardrobe items
+  const optCandidates = candidates?.optional || [];
+  const allowedIds = new Set(optCandidates.map((it) => it.item_id));
   if (Array.isArray(normalized.optional)) {
-    const optionalCandidates = Array.isArray(candidates?.optional) ? candidates.optional : [];
-    const allowedIds = new Set(optionalCandidates.map((it) => it.item_id));
     normalized.optional = normalized.optional
-      .filter((item) => item && typeof item.item_id === 'string' && allowedIds.has(item.item_id))
+      .filter((item) => item?.item_id && allowedIds.has(item.item_id))
       .map((item) => {
-        const matched = optionalCandidates.find((it) => it.item_id === item.item_id);
+        const matched = optCandidates.find((it) => it.item_id === item.item_id);
         return {
           item_id: matched.item_id,
           name: matched.name,
-          reason:
-            typeof item.reason === 'string' && item.reason.trim()
-              ? item.reason.trim()
-              : 'Optional weather layer.',
+          reason: item.reason?.trim() || 'Optional weather layer.',
         };
       });
   } else {
@@ -180,8 +211,7 @@ function selectBestCandidate(items, weather, slot) {
   if (!weather) return items[0];
 
   const feelsLike = Number(weather.feels_like_c);
-  const isRainy =
-    weather.is_rainy_or_snowy === true || Number(weather.rain_probability) >= 0.5;
+  const isRainy = weather.is_rainy_or_snowy === true || Number(weather.rain_probability) >= 0.5;
 
   let best = items[0];
   let bestScore = -Infinity;
@@ -190,46 +220,36 @@ function selectBestCandidate(items, weather, slot) {
     const tags = item?.tags || {};
     const warmth = Number(tags.warmth) || 3;
     const breathability = Number(tags.breathability) || 3;
-    const comfort = Number(tags.user_comfort) || 3;
     const waterproof = tags.waterproof === true ? 1 : 0;
 
     let score = 0;
     if (!Number.isNaN(feelsLike)) {
-      if (feelsLike < 10) score += warmth * 2;
+      if (feelsLike < 10)      score += warmth * 2;
       else if (feelsLike > 25) score += (6 - warmth) * 1.5 + breathability * 1.5;
-      else score += 5 - Math.abs(warmth - 3);
+      else                     score += 5 - Math.abs(warmth - 3);
     }
-    score += comfort * 0.5;
-    if (isRainy && (slot === 'footwear' || slot === 'top')) {
-      score += waterproof * 2;
-    }
+    if (isRainy && slot === 'footwear') score += waterproof * 2;
 
-    if (score > bestScore) {
-      bestScore = score;
-      best = item;
-    }
+    if (score > bestScore) { bestScore = score; best = item; }
   }
 
   return best;
 }
 
 function sanitizeAlternatives(alternatives, candidates) {
+  const validSlots = new Set(['top_inner', 'top_outer', 'bottom', 'footwear']);
   const safe = [];
-  const slots = ['top', 'bottom', 'footwear'];
 
   for (const alt of alternatives || []) {
-    if (!alt || !slots.includes(alt.replaces)) continue;
-    const slotCandidates = Array.isArray(candidates?.[alt.replaces]) ? candidates[alt.replaces] : [];
+    if (!alt || !validSlots.has(alt.replaces)) continue;
+    const slotCandidates = candidates?.[alt.replaces] || [];
     const matched = slotCandidates.find((it) => it.item_id === alt.item_id);
     if (!matched) continue;
     safe.push({
       replaces: alt.replaces,
       item_id: matched.item_id,
       name: matched.name,
-      reason:
-        typeof alt.reason === 'string' && alt.reason.trim()
-          ? alt.reason.trim()
-          : `Alternative ${alt.replaces} option.`,
+      reason: alt.reason?.trim() || `Alternative ${alt.replaces} option.`,
     });
     if (safe.length >= 3) break;
   }

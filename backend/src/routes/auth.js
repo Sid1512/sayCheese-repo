@@ -1,23 +1,7 @@
 const express = require('express');
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
-const { nanoid } = require('nanoid');
-const { getAdmin } = require('../config/firebase');
-const { USERS } = require('../config/collections');
+const { getClient, getAdminClient } = require('../config/supabase');
 
 const router = express.Router();
-const db = () => getAdmin().firestore();
-
-function generateUserId() {
-  return `usr_${nanoid(12)}`;
-}
-
-function createToken(userId) {
-  const secret = process.env.JWT_SECRET;
-  const expiresIn = process.env.JWT_EXPIRES_IN || '7d';
-  if (!secret) throw new Error('JWT_SECRET is required');
-  return jwt.sign({ sub: userId }, secret, { expiresIn });
-}
 
 // POST /api/v1/auth/register
 router.post('/register', async (req, res) => {
@@ -29,29 +13,33 @@ router.post('/register', async (req, res) => {
       });
     }
 
-    const usersRef = db().collection(USERS);
-    const existing = await usersRef.where('email', '==', email.trim().toLowerCase()).limit(1).get();
-    if (!existing.empty) {
+    // Supabase Auth handles hashing, duplicate detection, and JWT issuance
+    const { data, error } = await getClient().auth.signUp({ email, password });
+    if (error) {
+      const isExists = error.message?.toLowerCase().includes('already registered');
       return res.status(400).json({
-        error: { code: 'EMAIL_EXISTS', message: 'An account with this email already exists.', status: 400 },
+        error: {
+          code: isExists ? 'EMAIL_EXISTS' : 'REGISTRATION_FAILED',
+          message: isExists ? 'An account with this email already exists.' : error.message,
+          status: 400,
+        },
       });
     }
 
-    const userId = generateUserId();
-    const passwordHash = await bcrypt.hash(password, 10);
-    const now = new Date().toISOString();
+    const userId = data.user.id;
+    const token = data.session?.access_token;
 
-    await usersRef.doc(userId).set({
-      email: email.trim().toLowerCase(),
-      name: (name || '').trim() || null,
-      passwordHash,
-      createdAt: now,
-      updatedAt: now,
-      location: null,
-      preferences: null,
-    });
+    // Store display name in our profiles table
+    if (name) {
+      await getAdminClient()
+        .from('profiles')
+        .upsert({ id: userId, name: String(name).trim(), email: email.trim().toLowerCase() });
+    } else {
+      await getAdminClient()
+        .from('profiles')
+        .upsert({ id: userId, email: email.trim().toLowerCase() });
+    }
 
-    const token = createToken(userId);
     return res.status(201).json({ user_id: userId, token });
   } catch (err) {
     console.error('Register error:', err);
@@ -71,26 +59,17 @@ router.post('/login', async (req, res) => {
       });
     }
 
-    const usersRef = db().collection(USERS);
-    const snapshot = await usersRef.where('email', '==', email.trim().toLowerCase()).limit(1).get();
-    if (snapshot.empty) {
+    const { data, error } = await getClient().auth.signInWithPassword({ email, password });
+    if (error || !data.session) {
       return res.status(401).json({
         error: { code: 'UNAUTHORIZED', message: 'Invalid email or password', status: 401 },
       });
     }
 
-    const doc = snapshot.docs[0];
-    const userId = doc.id;
-    const { passwordHash } = doc.data();
-    const valid = await bcrypt.compare(password, passwordHash);
-    if (!valid) {
-      return res.status(401).json({
-        error: { code: 'UNAUTHORIZED', message: 'Invalid email or password', status: 401 },
-      });
-    }
-
-    const token = createToken(userId);
-    return res.json({ user_id: userId, token });
+    return res.json({
+      user_id: data.user.id,
+      token: data.session.access_token,
+    });
   } catch (err) {
     console.error('Login error:', err);
     return res.status(500).json({
@@ -109,11 +88,13 @@ router.get('/me', async (req, res) => {
     });
   }
   try {
-    const secret = process.env.JWT_SECRET;
-    if (!secret) throw new Error('JWT_SECRET not set');
-    const decoded = jwt.verify(token, secret);
-    const userId = decoded.sub;
-    return res.json({ user_id: userId });
+    const { data, error } = await getAdminClient().auth.getUser(token);
+    if (error || !data?.user) {
+      return res.status(401).json({
+        error: { code: 'UNAUTHORIZED', message: 'Invalid or expired token', status: 401 },
+      });
+    }
+    return res.json({ user_id: data.user.id });
   } catch {
     return res.status(401).json({
       error: { code: 'UNAUTHORIZED', message: 'Invalid or expired token', status: 401 },

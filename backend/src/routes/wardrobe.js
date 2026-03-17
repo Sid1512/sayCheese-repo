@@ -1,18 +1,16 @@
 const express = require('express');
 const multer = require('multer');
 const { nanoid } = require('nanoid');
-const { getAdmin } = require('../config/firebase');
+const { getAdminClient } = require('../config/supabase');
 const { authMiddleware } = require('../middleware/auth');
-const { WARDROBE_ITEMS } = require('../config/collections');
 const { detectClothingItem } = require('../services/vision');
 const { uploadScanImage } = require('../services/storage');
-const { toApiItem, toFirestoreItem } = require('../utils/wardrobeMapper');
+const { toApiItem, toDbItem } = require('../utils/wardrobeMapper');
 
 const router = express.Router();
-const db = () => getAdmin().firestore();
-const VALID_CATEGORIES = new Set([
-  'top', 'bottom', 'footwear', 'thermal', 'jacket', 'scarf', 'hat', 'gloves', 'facemask', 'umbrella',
-]);
+const db = () => getAdminClient();
+
+const VALID_CATEGORIES = new Set(['top', 'bottom', 'footwear', 'accessory']);
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -24,7 +22,7 @@ const upload = multer({
   },
 });
 
-// POST /api/v1/wardrobe/scan — requires auth, multipart image
+// POST /api/v1/wardrobe/scan
 router.post('/scan', authMiddleware, upload.single('image'), async (req, res) => {
   try {
     if (!req.file || !req.file.buffer) {
@@ -37,9 +35,7 @@ router.post('/scan', authMiddleware, upload.single('image'), async (req, res) =>
     const categoryHint = req.body.category_hint || null;
     const scanId = `scn_${nanoid(12)}`;
     const mimeType = req.file.mimetype || 'image/jpeg';
-    const allowFallback =
-      process.env.ALLOW_SCAN_FALLBACK !== 'false' &&
-      process.env.NODE_ENV !== 'production';
+    const allowFallback = process.env.ALLOW_SCAN_FALLBACK !== 'false' && process.env.NODE_ENV !== 'production';
 
     let imageUrl = null;
     let detected = null;
@@ -48,7 +44,6 @@ router.post('/scan', authMiddleware, upload.single('image'), async (req, res) =>
       imageUrl = await uploadScanImage(userId, scanId, req.file.buffer, mimeType);
     } catch (err) {
       if (!allowFallback) throw err;
-      // Fallback to a data URL if Firebase Storage isn't configured correctly in local dev.
       imageUrl = `data:${mimeType};base64,${req.file.buffer.toString('base64')}`;
     }
 
@@ -56,103 +51,69 @@ router.post('/scan', authMiddleware, upload.single('image'), async (req, res) =>
       detected = await detectClothingItem(req.file.buffer, mimeType, categoryHint);
     } catch (err) {
       if (!allowFallback) throw err;
-      // Fallback detection for local dev when Claude key/network is missing.
       const fallbackCategory = normalizeCategory(categoryHint);
       detected = {
         name: fallbackDisplayName(fallbackCategory),
         description: 'Scanned in fallback mode (vision API unavailable).',
         category: fallbackCategory,
-        tags: {
-          warmth: 3,
-          breathability: 3,
-          waterproof: false,
-          occasion: ['casual'],
-          color: 'unknown',
-          user_comfort: 3,
-        },
-        confidence: 0.5,
+        tags: { warmth: 3, breathability: 3, waterproof: false, occasion: ['casual'], color: 'unknown' },
       };
     }
-
-    const detected_item = {
-      name: detected.name,
-      description: detected.description || undefined,
-      category: detected.category,
-      image_url: imageUrl,
-      tags: detected.tags,
-      confidence: detected.confidence,
-    };
 
     return res.json({
       scan_id: scanId,
       status: 'complete',
-      detected_item,
+      detected_item: {
+        name: detected.name,
+        description: detected.description || undefined,
+        category: detected.category,
+        layer: detected.layer ?? null,
+        image_url: imageUrl,
+        tags: detected.tags,
+      },
     });
   } catch (err) {
     console.error('Wardrobe scan error:', err);
-    const code = err.message && err.message.includes('JSON') ? 'SCAN_FAILED' : 'INTERNAL_ERROR';
-    const status = code === 'SCAN_FAILED' ? 422 : 500;
-    return res.status(status).json({
-      error: { code, message: err.message || 'Scan failed', status },
+    return res.status(500).json({
+      error: { code: 'INTERNAL_ERROR', message: err.message || 'Scan failed', status: 500 },
     });
   }
 });
 
-function normalizeCategory(categoryHint) {
-  const raw = String(categoryHint || '').trim().toLowerCase();
-  if (VALID_CATEGORIES.has(raw)) return raw;
-  return 'top';
+function normalizeCategory(hint) {
+  const raw = String(hint || '').trim().toLowerCase();
+  return VALID_CATEGORIES.has(raw) ? raw : 'top';
 }
 
 function fallbackDisplayName(category) {
-  const names = {
-    top: 'Scanned Top',
-    bottom: 'Scanned Bottom',
-    footwear: 'Scanned Footwear',
-    thermal: 'Scanned Thermal',
-    jacket: 'Scanned Jacket',
-    scarf: 'Scanned Scarf',
-    hat: 'Scanned Hat',
-    gloves: 'Scanned Gloves',
-    facemask: 'Scanned Facemask',
-    umbrella: 'Scanned Umbrella',
-  };
+  const names = { top: 'Scanned Top', bottom: 'Scanned Bottom', footwear: 'Scanned Footwear', accessory: 'Scanned Accessory' };
   return names[category] || 'Scanned Item';
 }
 
-// GET /api/v1/wardrobe — list items for user, optional category, occasion, limit, offset
+// GET /api/v1/wardrobe
 router.get('/', authMiddleware, async (req, res) => {
   try {
     const userId = req.userId;
     const category = req.query.category ? String(req.query.category).trim() : null;
     const occasion = req.query.occasion ? String(req.query.occasion).trim() : null;
-    let limit = Math.min(Math.max(1, parseInt(req.query.limit, 10) || 50), 200);
+    const limit = Math.min(Math.max(1, parseInt(req.query.limit, 10) || 50), 200);
     const offset = Math.max(0, parseInt(req.query.offset, 10) || 0);
 
-    let ref = db().collection(WARDROBE_ITEMS).where('userId', '==', userId);
-    if (category) ref = ref.where('category', '==', category);
-    if (occasion) ref = ref.where('tags.occasion', 'array-contains', occasion);
-    ref = ref.orderBy('addedAt', 'desc');
+    let query = db()
+      .from('wardrobe_items')
+      .select('*', { count: 'exact' })
+      .eq('user_id', userId)
+      .order('added_at', { ascending: false })
+      .range(offset, offset + limit - 1);
 
-    let total = 0;
-    let docs = [];
-    try {
-      const [countSnap, itemsSnap] = await Promise.all([
-        ref.count().get(),
-        ref.limit(limit).offset(offset).get(),
-      ]);
-      total = countSnap.data().count ?? itemsSnap.docs.length;
-      docs = itemsSnap.docs;
-    } catch (e) {
-      if (e.message && e.message.includes('count')) {
-        const itemsSnap = await ref.limit(limit).offset(offset).get();
-        docs = itemsSnap.docs;
-        total = docs.length;
-      } else throw e;
-    }
+    if (category) query = query.eq('category', category);
+    // Postgres JSON array contains: tags->'occasion' @> '["value"]'
+    if (occasion) query = query.contains('tags->occasion', [occasion]);
 
-    const items = docs.map((d) => toApiItem(d.id, d.data()));
-    return res.json({ total, items });
+    const { data, error, count } = await query;
+    if (error) throw new Error(error.message);
+
+    return res.json({ total: count ?? data.length, items: (data || []).map(toApiItem) });
   } catch (err) {
     console.error('GET /wardrobe error:', err);
     return res.status(500).json({
@@ -161,61 +122,38 @@ router.get('/', authMiddleware, async (req, res) => {
   }
 });
 
-// POST /api/v1/wardrobe/items — add item (after scan confirm or manual)
+// POST /api/v1/wardrobe/items
 router.post('/items', authMiddleware, async (req, res) => {
   try {
     const userId = req.userId;
     const body = req.body || {};
-
     const name = body.name != null ? String(body.name).trim() : '';
     const category = body.category != null ? String(body.category).trim().toLowerCase() : '';
     const imageUrl = body.image_url != null ? String(body.image_url).trim() : '';
     const tags = body.tags && typeof body.tags === 'object' ? body.tags : {};
+    const layer = category === 'top' && (body.layer === 'inner' || body.layer === 'outer')
+      ? body.layer : null;
 
-    if (!name) {
-      return res.status(400).json({
-        error: { code: 'VALIDATION_ERROR', message: 'name is required', status: 400 },
-      });
-    }
-    if (!category || !VALID_CATEGORIES.has(category)) {
-      return res.status(400).json({
-        error: {
-          code: 'VALIDATION_ERROR',
-          message: `category is required and must be one of: ${[...VALID_CATEGORIES].join(', ')}`,
-          status: 400,
-        },
-      });
-    }
-    if (!imageUrl) {
-      return res.status(400).json({
-        error: { code: 'VALIDATION_ERROR', message: 'image_url is required', status: 400 },
-      });
-    }
+    if (!name) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'name is required', status: 400 } });
+    if (!category || !VALID_CATEGORIES.has(category)) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: `category must be one of: ${[...VALID_CATEGORIES].join(', ')}`, status: 400 } });
+    if (!imageUrl) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'image_url is required', status: 400 } });
 
     const itemId = `itm_${nanoid(12)}`;
-    const doc = toFirestoreItem(userId, {
-      ...body,
-      name,
-      category,
-      image_url: imageUrl,
-      confidence: body.confidence != null ? body.confidence : undefined,
+    const doc = toDbItem(userId, itemId, {
+      ...body, name, category, layer, image_url: imageUrl,
       tags: {
         warmth: clamp(tags.warmth, 1, 5),
         breathability: clamp(tags.breathability, 1, 5),
         waterproof: Boolean(tags.waterproof),
         occasion: Array.isArray(tags.occasion) ? tags.occasion : [tags.occasion || 'casual'].filter(Boolean),
         color: String(tags.color || 'unknown').trim(),
-        user_comfort: clamp(tags.user_comfort, 1, 5),
       },
     });
 
-    await db().collection(WARDROBE_ITEMS).doc(itemId).set(doc);
+    const { data, error } = await db().from('wardrobe_items').insert(doc).select().single();
+    if (error) throw new Error(error.message);
 
-    const created = {
-      ...doc,
-      addedAt: doc.addedAt,
-    };
-    return res.status(201).json(toApiItem(itemId, created));
+    return res.status(201).json(toApiItem(data));
   } catch (err) {
     console.error('POST /wardrobe/items error:', err);
     return res.status(500).json({
@@ -229,23 +167,12 @@ router.get('/items/:item_id', authMiddleware, async (req, res) => {
   try {
     const userId = req.userId;
     const itemId = String(req.params.item_id || '');
-    const snap = await db().collection(WARDROBE_ITEMS).doc(itemId).get();
-    if (!snap.exists) {
-      return res.status(404).json({
-        error: { code: 'ITEM_NOT_FOUND', message: 'No wardrobe item found', status: 404 },
-      });
-    }
-    const data = snap.data() || {};
-    if (data.userId !== userId) {
-      return res.status(403).json({
-        error: { code: 'FORBIDDEN', message: 'Item does not belong to user', status: 403 },
-      });
-    }
-    return res.json(toApiItem(itemId, data));
+    const { data, error } = await db().from('wardrobe_items').select('*').eq('id', itemId).single();
+    if (error || !data) return res.status(404).json({ error: { code: 'ITEM_NOT_FOUND', message: 'No wardrobe item found', status: 404 } });
+    if (data.user_id !== userId) return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Item does not belong to user', status: 403 } });
+    return res.json(toApiItem(data));
   } catch (err) {
-    return res.status(500).json({
-      error: { code: 'INTERNAL_ERROR', message: err.message || 'Failed to get item', status: 500 },
-    });
+    return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message || 'Failed to get item', status: 500 } });
   }
 });
 
@@ -254,46 +181,33 @@ router.patch('/items/:item_id', authMiddleware, async (req, res) => {
   try {
     const userId = req.userId;
     const itemId = String(req.params.item_id || '');
-    const ref = db().collection(WARDROBE_ITEMS).doc(itemId);
-    const snap = await ref.get();
-    if (!snap.exists) {
-      return res.status(404).json({
-        error: { code: 'ITEM_NOT_FOUND', message: 'No wardrobe item found', status: 404 },
-      });
-    }
-    const current = snap.data() || {};
-    if (current.userId !== userId) {
-      return res.status(403).json({
-        error: { code: 'FORBIDDEN', message: 'Item does not belong to user', status: 403 },
-      });
-    }
+    const { data: current, error: fetchErr } = await db().from('wardrobe_items').select('*').eq('id', itemId).single();
+    if (fetchErr || !current) return res.status(404).json({ error: { code: 'ITEM_NOT_FOUND', message: 'No wardrobe item found', status: 404 } });
+    if (current.user_id !== userId) return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Item does not belong to user', status: 403 } });
 
     const body = req.body || {};
     const next = { ...current };
     if (body.name != null) next.name = String(body.name).trim();
     if (body.description != null) next.description = String(body.description).trim();
     if (body.category != null) {
-      const category = String(body.category).trim().toLowerCase();
-      if (!VALID_CATEGORIES.has(category)) {
-        return res.status(400).json({
-          error: { code: 'VALIDATION_ERROR', message: 'Invalid category', status: 400 },
-        });
-      }
-      next.category = category;
+      const cat = String(body.category).trim().toLowerCase();
+      if (!VALID_CATEGORIES.has(cat)) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid category', status: 400 } });
+      next.category = cat;
     }
-    if (body.tags && typeof body.tags === 'object') {
-      next.tags = {
-        ...(current.tags || {}),
-        ...body.tags,
-      };
+    // Update layer — only valid for tops, must be cleared for other categories
+    if (body.layer !== undefined) {
+      const cat = next.category;
+      next.layer = cat === 'top' && (body.layer === 'inner' || body.layer === 'outer')
+        ? body.layer
+        : null;
     }
+    if (body.tags && typeof body.tags === 'object') next.tags = { ...(current.tags || {}), ...body.tags };
 
-    await ref.set(next, { merge: true });
-    return res.json(toApiItem(itemId, next));
+    const { data, error } = await db().from('wardrobe_items').update(next).eq('id', itemId).select().single();
+    if (error) throw new Error(error.message);
+    return res.json(toApiItem(data));
   } catch (err) {
-    return res.status(500).json({
-      error: { code: 'INTERNAL_ERROR', message: err.message || 'Failed to update item', status: 500 },
-    });
+    return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message || 'Failed to update item', status: 500 } });
   }
 });
 
@@ -302,25 +216,13 @@ router.delete('/items/:item_id', authMiddleware, async (req, res) => {
   try {
     const userId = req.userId;
     const itemId = String(req.params.item_id || '');
-    const ref = db().collection(WARDROBE_ITEMS).doc(itemId);
-    const snap = await ref.get();
-    if (!snap.exists) {
-      return res.status(404).json({
-        error: { code: 'ITEM_NOT_FOUND', message: 'No wardrobe item found', status: 404 },
-      });
-    }
-    const data = snap.data() || {};
-    if (data.userId !== userId) {
-      return res.status(403).json({
-        error: { code: 'FORBIDDEN', message: 'Item does not belong to user', status: 403 },
-      });
-    }
-    await ref.delete();
+    const { data, error: fetchErr } = await db().from('wardrobe_items').select('user_id').eq('id', itemId).single();
+    if (fetchErr || !data) return res.status(404).json({ error: { code: 'ITEM_NOT_FOUND', message: 'No wardrobe item found', status: 404 } });
+    if (data.user_id !== userId) return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Item does not belong to user', status: 403 } });
+    await db().from('wardrobe_items').delete().eq('id', itemId);
     return res.status(204).send();
   } catch (err) {
-    return res.status(500).json({
-      error: { code: 'INTERNAL_ERROR', message: err.message || 'Failed to delete item', status: 500 },
-    });
+    return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message || 'Failed to delete item', status: 500 } });
   }
 });
 

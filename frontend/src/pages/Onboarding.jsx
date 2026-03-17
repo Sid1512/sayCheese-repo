@@ -15,6 +15,8 @@ export default function Onboarding() {
   const [authLoading, setAuthLoading] = useState(false);
 
   const [loginForm, setLoginForm] = useState({ email: "", password: "" });
+  const [loginTouched, setLoginTouched] = useState({ email: false, password: false });
+  const [touched, setTouched] = useState({});
   const [form, setForm] = useState({
     name: "",
     email: "",
@@ -25,7 +27,6 @@ export default function Onboarding() {
     weight: "",
     skinTone: "",
     stylePreference: [],
-    comfortPriority: "comfort",
   });
 
   // ── Theme tokens ──
@@ -65,8 +66,64 @@ export default function Onboarding() {
     }));
   }
 
+  // ── Validation helpers ──
+  function isValidEmail(email) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+  }
+
+  function isValidName(name) {
+    return name.trim().length >= 2 && /^[a-zA-Z\s'-]+$/.test(name.trim());
+  }
+
+  function isValidPassword(password) {
+    return password.length >= 8;
+  }
+
+  function isValidAge(age) {
+    const n = Number(age);
+    return age !== "" && Number.isInteger(n) && n >= 13 && n <= 120;
+  }
+
+  function loginErrors() {
+    const errs = {};
+    if (loginTouched.email && !loginForm.email) errs.email = "Email is required.";
+    else if (loginTouched.email && !isValidEmail(loginForm.email)) errs.email = "Enter a valid email address.";
+    if (loginTouched.password && !loginForm.password) errs.password = "Password is required.";
+    return errs;
+  }
+
+  function step1Errors() {
+    const errs = {};
+    if (touched.name && !form.name) errs.name = "Name is required.";
+    else if (touched.name && !isValidName(form.name)) errs.name = "Name can only contain letters, spaces, hyphens, and apostrophes.";
+    if (touched.email && !form.email) errs.email = "Email is required.";
+    else if (touched.email && !isValidEmail(form.email)) errs.email = "Enter a valid email address.";
+    if (touched.password && !form.password) errs.password = "Password is required.";
+    else if (touched.password && !isValidPassword(form.password)) errs.password = "Password must be at least 8 characters.";
+    if (touched.age && !form.age) errs.age = "Age is required.";
+    else if (touched.age && !isValidAge(form.age)) errs.age = "Enter a valid age between 13 and 120.";
+    if (touched.gender && !form.gender) errs.gender = "Please select a gender.";
+    return errs;
+  }
+
+  const isStep1Valid =
+    isValidName(form.name) &&
+    isValidEmail(form.email) &&
+    isValidPassword(form.password) &&
+    isValidAge(form.age) &&
+    form.gender;
+
+  function touchAllStep1() {
+    setTouched({ name: true, email: true, password: true, age: true, gender: true });
+  }
+
+  function touchAllLogin() {
+    setLoginTouched({ email: true, password: true });
+  }
+
   async function handleLogin() {
-    if (!loginForm.email || !loginForm.password) return;
+    touchAllLogin();
+    if (!isValidEmail(loginForm.email) || !loginForm.password) return;
     setAuthLoading(true);
     setError("");
     try {
@@ -90,15 +147,12 @@ export default function Onboarding() {
       });
       await updateProfile({
         preferences: {
-          default_activity: form.comfortPriority === "comfort" ? "casual" : "work",
-          mood_selector_enabled: true,
           age: form.age,
           gender: form.gender,
           height: form.height,
           weight: form.weight,
           skinTone: form.skinTone,
           stylePreference: form.stylePreference,
-          comfortPriority: form.comfortPriority,
         },
       });
       await fetchUserAndWardrobe();
@@ -163,27 +217,37 @@ export default function Onboarding() {
             </button>
             <h2 className={`text-2xl font-bold ${text} mb-2`}>Welcome back</h2>
             <p className={`${subheading} mb-6`}>Sign in to your account</p>
+            {(() => { const errs = loginErrors(); return (
             <div className="space-y-4">
-              <input
-                className={`w-full border rounded-xl px-4 py-3 focus:outline-none transition-all ${inputBg}`}
-                placeholder="Email"
-                type="email"
-                value={loginForm.email}
-                onChange={(e) => setLoginForm((p) => ({ ...p, email: e.target.value }))}
-              />
-              <input
-                className={`w-full border rounded-xl px-4 py-3 focus:outline-none transition-all ${inputBg}`}
-                placeholder="Password"
-                type="password"
-                value={loginForm.password}
-                onChange={(e) => setLoginForm((p) => ({ ...p, password: e.target.value }))}
-                onKeyDown={(e) => e.key === "Enter" && handleLogin()}
-              />
+              <div>
+                <input
+                  className={`w-full border rounded-xl px-4 py-3 focus:outline-none transition-all ${errs.email ? "border-red-400" : inputBg}`}
+                  placeholder="Email"
+                  type="email"
+                  value={loginForm.email}
+                  onChange={(e) => setLoginForm((p) => ({ ...p, email: e.target.value }))}
+                  onBlur={() => setLoginTouched((p) => ({ ...p, email: true }))}
+                />
+                {errs.email && <p className={`${errorText} text-xs mt-1 ml-1`}>{errs.email}</p>}
+              </div>
+              <div>
+                <input
+                  className={`w-full border rounded-xl px-4 py-3 focus:outline-none transition-all ${errs.password ? "border-red-400" : inputBg}`}
+                  placeholder="Password"
+                  type="password"
+                  value={loginForm.password}
+                  onChange={(e) => setLoginForm((p) => ({ ...p, password: e.target.value }))}
+                  onBlur={() => setLoginTouched((p) => ({ ...p, password: true }))}
+                  onKeyDown={(e) => e.key === "Enter" && handleLogin()}
+                />
+                {errs.password && <p className={`${errorText} text-xs mt-1 ml-1`}>{errs.password}</p>}
+              </div>
             </div>
+            ); })()}
             {error && <p className={`${errorText} text-sm mt-3`}>{error}</p>}
             <button
               onClick={handleLogin}
-              disabled={authLoading || !loginForm.email || !loginForm.password}
+              disabled={authLoading}
               className={`w-full mt-6 ${btnPrimary} font-bold py-4 rounded-2xl disabled:opacity-40 transition-all`}
             >
               {authLoading ? "Signing in..." : "Sign In"}
@@ -211,52 +275,75 @@ export default function Onboarding() {
             </button>
             <h2 className={`text-2xl font-bold ${text} mb-2`}>Create your account</h2>
             <p className={`${subheading} mb-6`}>Let's get you set up</p>
+            {(() => { const errs = step1Errors(); return (
             <div className="space-y-4">
-              <input
-                className={`w-full border rounded-xl px-4 py-3 focus:outline-none transition-all ${inputBg}`}
-                placeholder="Your name"
-                value={form.name}
-                onChange={(e) => updateForm("name", e.target.value)}
-              />
-              <input
-                className={`w-full border rounded-xl px-4 py-3 focus:outline-none transition-all ${inputBg}`}
-                placeholder="Email"
-                type="email"
-                value={form.email}
-                onChange={(e) => updateForm("email", e.target.value)}
-              />
-              <input
-                className={`w-full border rounded-xl px-4 py-3 focus:outline-none transition-all ${inputBg}`}
-                placeholder="Password"
-                type="password"
-                value={form.password}
-                onChange={(e) => updateForm("password", e.target.value)}
-              />
-              <input
-                className={`w-full border rounded-xl px-4 py-3 focus:outline-none transition-all ${inputBg}`}
-                placeholder="Age"
-                type="number"
-                value={form.age}
-                onChange={(e) => updateForm("age", e.target.value)}
-              />
-              <div className="grid grid-cols-3 gap-3">
-                {["Male", "Female", "Other"].map((g) => (
-                  <button
-                    key={g}
-                    onClick={() => updateForm("gender", g)}
-                    className={`py-3 rounded-xl border transition-all text-sm font-medium ${
-                      form.gender === g ? pillActive : pillInactive
-                    }`}
-                  >
-                    {g}
-                  </button>
-                ))}
+              <div>
+                <input
+                  className={`w-full border rounded-xl px-4 py-3 focus:outline-none transition-all ${errs.name ? "border-red-400" : inputBg}`}
+                  placeholder="Your name"
+                  value={form.name}
+                  onChange={(e) => updateForm("name", e.target.value)}
+                  onBlur={() => setTouched((p) => ({ ...p, name: true }))}
+                />
+                {errs.name && <p className={`${errorText} text-xs mt-1 ml-1`}>{errs.name}</p>}
+              </div>
+              <div>
+                <input
+                  className={`w-full border rounded-xl px-4 py-3 focus:outline-none transition-all ${errs.email ? "border-red-400" : inputBg}`}
+                  placeholder="Email"
+                  type="email"
+                  value={form.email}
+                  onChange={(e) => updateForm("email", e.target.value)}
+                  onBlur={() => setTouched((p) => ({ ...p, email: true }))}
+                />
+                {errs.email && <p className={`${errorText} text-xs mt-1 ml-1`}>{errs.email}</p>}
+              </div>
+              <div>
+                <input
+                  className={`w-full border rounded-xl px-4 py-3 focus:outline-none transition-all ${errs.password ? "border-red-400" : inputBg}`}
+                  placeholder="Password (min. 8 characters)"
+                  type="password"
+                  value={form.password}
+                  onChange={(e) => updateForm("password", e.target.value)}
+                  onBlur={() => setTouched((p) => ({ ...p, password: true }))}
+                />
+                {errs.password && <p className={`${errorText} text-xs mt-1 ml-1`}>{errs.password}</p>}
+              </div>
+              <div>
+                <input
+                  className={`w-full border rounded-xl px-4 py-3 focus:outline-none transition-all ${errs.age ? "border-red-400" : inputBg}`}
+                  placeholder="Age"
+                  type="number"
+                  value={form.age}
+                  onChange={(e) => updateForm("age", e.target.value)}
+                  onBlur={() => setTouched((p) => ({ ...p, age: true }))}
+                />
+                {errs.age && <p className={`${errorText} text-xs mt-1 ml-1`}>{errs.age}</p>}
+              </div>
+              <div>
+                <div className="grid grid-cols-3 gap-3">
+                  {["Male", "Female", "Other"].map((g) => (
+                    <button
+                      key={g}
+                      onClick={() => { updateForm("gender", g); setTouched((p) => ({ ...p, gender: true })); }}
+                      className={`py-3 rounded-xl border transition-all text-sm font-medium ${
+                        form.gender === g ? pillActive : pillInactive
+                      }`}
+                    >
+                      {g}
+                    </button>
+                  ))}
+                </div>
+                {errs.gender && <p className={`${errorText} text-xs mt-1 ml-1`}>{errs.gender}</p>}
               </div>
             </div>
+            ); })()}
             {error && <p className={`${errorText} text-sm mt-3`}>{error}</p>}
             <button
-              onClick={() => setStep(2)}
-              disabled={!form.name || !form.email || !form.password || !form.age || !form.gender}
+              onClick={() => {
+                touchAllStep1();
+                if (isStep1Valid) setStep(2);
+              }}
               className={`w-full mt-6 ${btnPrimary} font-bold py-4 rounded-2xl disabled:opacity-40 transition-all`}
             >
               Continue
@@ -359,22 +446,6 @@ export default function Onboarding() {
                   {style}
                 </button>
               ))}
-            </div>
-            <div className="mb-6">
-              <p className={`${textMuted} text-sm mb-3`}>What matters most to you?</p>
-              <div className="grid grid-cols-2 gap-3">
-                {["comfort", "style"].map((p) => (
-                  <button
-                    key={p}
-                    onClick={() => updateForm("comfortPriority", p)}
-                    className={`py-3 rounded-xl border transition-all text-sm font-medium capitalize ${
-                      form.comfortPriority === p ? pillActive : pillInactive
-                    }`}
-                  >
-                    {p}
-                  </button>
-                ))}
-              </div>
             </div>
             {error && <p className={`${errorText} text-sm mb-3`}>{error}</p>}
             <button

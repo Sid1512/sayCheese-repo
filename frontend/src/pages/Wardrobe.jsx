@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useApp } from "../context/AppContext";
 import { useTheme } from "../App";
-import { addWardrobeItem, deleteWardrobeItem, scanItem } from "../services/wardrobe";
+import { addWardrobeItem, deleteWardrobeItem, scanItem, updateWardrobeItem } from "../services/wardrobe";
 
 export default function Wardrobe() {
   const { wardrobe, refreshWardrobe } = useApp();
@@ -14,6 +14,8 @@ export default function Wardrobe() {
   const [scanResult, setScanResult] = useState(null);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(null);
+  const [editItem, setEditItem] = useState(null);
+  const [editSaving, setEditSaving] = useState(false);
   const fileRef = useRef();
 
   const text = isDark ? "text-white" : "text-gray-900";
@@ -30,28 +32,62 @@ export default function Wardrobe() {
 
   const categoryEmoji = (cat) => {
     const map = {
-      top: "👕", bottom: "👖", footwear: "👟",
-      jacket: "🧥", thermal: "🧣", scarf: "🧣",
-      hat: "🧢", gloves: "🧤", facemask: "😷",
-      umbrella: "☂️", accessories: "🎩",
+      top: "👕", bottom: "👖", footwear: "👟", accessory: "🎩",
     };
     return map[cat] || "👔";
   };
 
-  const sustainabilityColor = (score) => {
-    if (score >= 4) return "text-green-500";
-    if (score >= 3) return "text-yellow-500";
-    return "text-red-500";
-  };
 
   const slotToCategories = {
-    top: ["top"],
+    top_inner: ["top"],  // inner layer — filter further by layer in picker
+    top_outer: ["top"],  // outer layer — filter further by layer in picker
     bottom: ["bottom"],
     footwear: ["footwear"],
-    optional: ["thermal", "jacket", "scarf", "hat", "gloves", "facemask", "umbrella", "accessories"],
+    optional: ["accessory"],
+  };
+
+  // For top slots, further filter by layer within the category
+  const slotLayerFilter = {
+    top_inner: "inner",
+    top_outer: "outer",
   };
 
   const allowedCategories = slotToCategories[pickSlot] || [];
+
+  async function handleSaveEdit() {
+    if (!editItem) return;
+    setEditSaving(true);
+    try {
+      await updateWardrobeItem(editItem.item_id, {
+        name: editItem.name,
+        layer: editItem.layer,
+        tags: {
+          warmth: editItem.tags.warmth,
+          breathability: editItem.tags.breathability,
+          waterproof: editItem.tags.waterproof,
+          occasion: editItem.tags.occasion,
+          color: editItem.tags.color,
+        },
+      });
+      await refreshWardrobe();
+      setEditItem(null);
+      setSelectedItem(null);
+    } catch (err) {
+      alert(err?.message || "Failed to save changes.");
+    } finally {
+      setEditSaving(false);
+    }
+  }
+
+  function toggleOccasion(occ) {
+    setEditItem((prev) => {
+      const current = prev.tags.occasion || [];
+      const next = current.includes(occ)
+        ? current.filter((o) => o !== occ)
+        : [...current, occ];
+      return { ...prev, tags: { ...prev.tags, occasion: next } };
+    });
+  }
 
   async function handlePhotoSelect(e) {
     const file = e.target.files[0];
@@ -63,7 +99,6 @@ export default function Wardrobe() {
       setScanResult({
         ...result.detected_item,
         editName: result.detected_item.name,
-        editComfort: result.detected_item.tags?.user_comfort || 3,
       });
     } catch (err) {
       alert("Failed to scan item. Please try again.");
@@ -82,11 +117,9 @@ export default function Wardrobe() {
         name: scanResult.editName,
         description: scanResult.description,
         category: scanResult.category,
+        layer: scanResult.layer ?? null,
         image_url: scanResult.image_url,
-        tags: {
-          ...scanResult.tags,
-          user_comfort: scanResult.editComfort,
-        },
+        tags: { ...scanResult.tags },
       });
       setScanResult(null);
       await refreshWardrobe();
@@ -123,7 +156,15 @@ export default function Wardrobe() {
   }
 
   const sourceWardrobe = isPickerMode
-    ? wardrobe.filter((item) => allowedCategories.includes(item.category))
+    ? wardrobe.filter((item) => {
+        if (!allowedCategories.includes(item.category)) return false;
+        const layerFilter = slotLayerFilter[pickSlot];
+        if (!layerFilter) return true;
+        // For top_inner: show items with layer='inner' OR layer=null (legacy items)
+        // For top_outer: show items with layer='outer' only
+        if (layerFilter === 'inner') return item.layer === 'inner' || item.layer == null;
+        return item.layer === layerFilter;
+      })
     : wardrobe;
 
   const groupedWardrobe = sourceWardrobe.reduce((acc, item) => {
@@ -171,10 +212,10 @@ export default function Wardrobe() {
               <p className={`${textFaint} text-xs`}>Total Items</p>
             </div>
             <div className={`${card} border rounded-2xl p-3 text-center`}>
-              <p className="text-green-500 text-2xl font-bold">
-                {wardrobe.filter((i) => (i.tags?.sustainabilityScore || 0) >= 4).length}
+              <p className="text-green-400 text-2xl font-bold">
+                {wardrobe.filter((i) => (i.times_worn_last_7_days ?? 0) > 0).length}
               </p>
-              <p className={`${textFaint} text-xs`}>Eco Items</p>
+              <p className={`${textFaint} text-xs`}>Worn This Week</p>
             </div>
             <div className={`${card} border rounded-2xl p-3 text-center`}>
               <p className="text-blue-400 text-2xl font-bold">
@@ -205,7 +246,7 @@ export default function Wardrobe() {
         <div className={`${card} backdrop-blur-md border rounded-3xl p-6 mb-4 text-center`}>
           <div className="text-4xl mb-3 animate-bounce">🔍</div>
           <p className={`${text} font-medium`}>Analyzing your item...</p>
-          <p className={`${textFaint} text-sm mt-1`}>Detecting category, warmth, sustainability & more</p>
+          <p className={`${textFaint} text-sm mt-1`}>Detecting category, warmth, and more</p>
         </div>
       )}
 
@@ -237,11 +278,6 @@ export default function Wardrobe() {
                     <p className={`${text} text-sm font-medium truncate`}>{item.name}</p>
                     <p className={`${textFaint} text-xs capitalize`}>{item.tags?.color}</p>
                     <div className="flex justify-between mt-1">
-                      {item.tags?.sustainabilityScore && (
-                        <span className={`text-xs ${sustainabilityColor(item.tags.sustainabilityScore)}`}>
-                          ♻️ {item.tags.sustainabilityScore}/5
-                        </span>
-                      )}
                       <span className={`${textFaint} text-xs`}>
                         {item.times_worn_last_30_days ?? item.times_worn ?? 0}x worn
                       </span>
@@ -292,6 +328,26 @@ export default function Wardrobe() {
                 <p className={`${textFaint} text-xs`}>Color</p>
                 <p className={`${text} text-sm font-medium capitalize`}>{scanResult.tags?.color}</p>
               </div>
+              {scanResult.category === "top" && (
+                <div className={`col-span-2 ${cardInner} rounded-xl p-3`}>
+                  <p className={`${textFaint} text-xs mb-2`}>Layer type</p>
+                  <div className="flex gap-2">
+                    {["inner", "outer"].map((l) => (
+                      <button
+                        key={l}
+                        onClick={() => setScanResult((p) => ({ ...p, layer: l }))}
+                        className={`flex-1 py-2 rounded-xl text-sm font-medium capitalize transition-all ${
+                          (scanResult.layer ?? "inner") === l
+                            ? isDark ? "bg-white text-blue-900" : "bg-gray-900 text-white"
+                            : cardInner + " " + text
+                        }`}
+                      >
+                        {l === "inner" ? "👕 Inner (t-shirt, shirt)" : "🧥 Outer (hoodie, cardigan)"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
               <div className={`${cardInner} rounded-xl p-3`}>
                 <p className={`${textFaint} text-xs`}>Warmth</p>
                 <p className={`${text} text-sm font-medium`}>{"🔥".repeat(scanResult.tags?.warmth || 1)}</p>
@@ -300,38 +356,9 @@ export default function Wardrobe() {
                 <p className={`${textFaint} text-xs`}>Waterproof</p>
                 <p className={`${text} text-sm font-medium`}>{scanResult.tags?.waterproof ? "✅ Yes" : "❌ No"}</p>
               </div>
-              {scanResult.tags?.sustainabilityScore && (
-                <div className={`${cardInner} rounded-xl p-3`}>
-                  <p className={`${textFaint} text-xs`}>Sustainability</p>
-                  <p className={`font-medium text-sm ${sustainabilityColor(scanResult.tags.sustainabilityScore)}`}>
-                    {scanResult.tags.sustainabilityScore}/5
-                  </p>
-                </div>
-              )}
-              <div className={`${cardInner} rounded-xl p-3`}>
-                <p className={`${textFaint} text-xs`}>Confidence</p>
-                <p className={`${text} text-sm font-medium`}>{Math.round((scanResult.confidence || 0) * 100)}%</p>
-              </div>
+
             </div>
 
-            <div className="mb-4">
-              <p className={`${textFaint} text-xs mb-2`}>How comfortable is this item? (1–5)</p>
-              <div className="flex gap-2">
-                {[1, 2, 3, 4, 5].map((n) => (
-                  <button
-                    key={n}
-                    onClick={() => setScanResult((p) => ({ ...p, editComfort: n }))}
-                    className={`flex-1 py-2 rounded-xl text-sm font-bold transition-all ${
-                      scanResult.editComfort === n
-                        ? isDark ? "bg-white text-blue-900" : "bg-gray-900 text-white"
-                        : cardInner + " " + text
-                    }`}
-                  >
-                    {n}
-                  </button>
-                ))}
-              </div>
-            </div>
 
             {scanResult.description && (
               <div className={`${cardInner} rounded-xl p-3 mb-4`}>
@@ -396,10 +423,7 @@ export default function Wardrobe() {
                 <p className={`${textFaint} text-xs`}>Waterproof</p>
                 <p className={`${text} font-medium`}>{selectedItem.tags?.waterproof ? "✅ Yes" : "❌ No"}</p>
               </div>
-              <div className={`${cardInner} rounded-xl p-3`}>
-                <p className={`${textFaint} text-xs`}>Comfort</p>
-                <p className={`${text} font-medium`}>{selectedItem.tags?.user_comfort || "—"}/5</p>
-              </div>
+
             </div>
 
             {selectedItem.tags?.occasion?.length > 0 && (
@@ -422,10 +446,164 @@ export default function Wardrobe() {
                 {deleting ? "Deleting..." : "🗑️ Remove"}
               </button>
               <button
+                onClick={() => setEditItem({ ...selectedItem })}
+                className={`flex-1 ${isDark ? "bg-white/10 text-white" : "bg-black/10 text-gray-900"} py-3 rounded-2xl font-medium text-sm`}
+              >
+                ✏️ Edit
+              </button>
+              <button
                 onClick={() => setSelectedItem(null)}
                 className={`flex-1 ${closeBtn} py-3 rounded-2xl font-medium text-sm`}
               >
                 Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* ── EDIT ITEM MODAL ── */}
+      {!isPickerMode && editItem && (
+        <div
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-end justify-center p-4"
+          onClick={() => setEditItem(null)}
+        >
+          <div
+            className={`${isDark ? "bg-blue-950" : "bg-white"} border ${isDark ? "border-white/20" : "border-black/10"} rounded-3xl p-5 w-full max-w-md max-h-[85vh] overflow-y-auto`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className={`${text} text-lg font-bold mb-1`}>Edit Item</h3>
+            <p className={`${textMuted} text-sm mb-4`}>Update details for this item</p>
+
+            {editItem.image_url && (
+              <img src={editItem.image_url} alt={editItem.name} className="w-full h-40 object-cover rounded-2xl mb-4" />
+            )}
+
+            {/* Name */}
+            <div className="mb-3">
+              <p className={`${textFaint} text-xs mb-1`}>Name</p>
+              <input
+                className={`w-full border rounded-xl px-3 py-2 text-sm focus:outline-none ${isDark ? "bg-white/10 border-white/20 text-white placeholder-white/40" : "bg-black/5 border-black/20 text-gray-900"}`}
+                value={editItem.name}
+                onChange={(e) => setEditItem((p) => ({ ...p, name: e.target.value }))}
+              />
+            </div>
+
+            {/* Layer — tops only */}
+            {editItem.category === "top" && (
+              <div className="mb-3">
+                <p className={`${textFaint} text-xs mb-2`}>Layer type</p>
+                <div className="flex gap-2">
+                  {["inner", "outer"].map((l) => (
+                    <button
+                      key={l}
+                      onClick={() => setEditItem((p) => ({ ...p, layer: l }))}
+                      className={`flex-1 py-2 rounded-xl text-sm font-medium border transition-all ${
+                        (editItem.layer ?? "inner") === l
+                          ? isDark ? "bg-white text-blue-900 border-white" : "bg-gray-900 text-white border-gray-900"
+                          : isDark ? "bg-white/10 text-white border-white/20" : "bg-black/5 text-gray-900 border-black/20"
+                      }`}
+                    >
+                      {l === "inner" ? "👕 Inner" : "🧥 Outer"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Warmth */}
+            <div className="mb-3">
+              <p className={`${textFaint} text-xs mb-2`}>Warmth</p>
+              <div className="flex gap-2">
+                {[1, 2, 3, 4, 5].map((n) => (
+                  <button
+                    key={n}
+                    onClick={() => setEditItem((p) => ({ ...p, tags: { ...p.tags, warmth: n } }))}
+                    className={`flex-1 py-2 rounded-xl text-sm font-bold transition-all ${
+                      editItem.tags.warmth === n
+                        ? isDark ? "bg-white text-blue-900" : "bg-gray-900 text-white"
+                        : `${cardInner} ${text}`
+                    }`}
+                  >
+                    {"🔥".repeat(n)}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Breathability */}
+            <div className="mb-3">
+              <p className={`${textFaint} text-xs mb-2`}>Breathability</p>
+              <div className="flex gap-2">
+                {[1, 2, 3, 4, 5].map((n) => (
+                  <button
+                    key={n}
+                    onClick={() => setEditItem((p) => ({ ...p, tags: { ...p.tags, breathability: n } }))}
+                    className={`flex-1 py-2 rounded-xl text-sm font-bold transition-all ${
+                      editItem.tags.breathability === n
+                        ? isDark ? "bg-white text-blue-900" : "bg-gray-900 text-white"
+                        : `${cardInner} ${text}`
+                    }`}
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Waterproof */}
+            <div className="mb-3">
+              <p className={`${textFaint} text-xs mb-2`}>Waterproof</p>
+              <div className="flex gap-2">
+                {[true, false].map((val) => (
+                  <button
+                    key={String(val)}
+                    onClick={() => setEditItem((p) => ({ ...p, tags: { ...p.tags, waterproof: val } }))}
+                    className={`flex-1 py-2 rounded-xl text-sm font-medium border transition-all ${
+                      editItem.tags.waterproof === val
+                        ? isDark ? "bg-white text-blue-900 border-white" : "bg-gray-900 text-white border-gray-900"
+                        : isDark ? "bg-white/10 text-white border-white/20" : "bg-black/5 text-gray-900 border-black/20"
+                    }`}
+                  >
+                    {val ? "✅ Yes" : "❌ No"}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Occasions */}
+            <div className="mb-4">
+              <p className={`${textFaint} text-xs mb-2`}>Occasions</p>
+              <div className="flex flex-wrap gap-2">
+                {["casual", "work", "athletic", "smart_casual", "party"].map((occ) => (
+                  <button
+                    key={occ}
+                    onClick={() => toggleOccasion(occ)}
+                    className={`px-3 py-1.5 rounded-full text-xs font-medium border capitalize transition-all ${
+                      (editItem.tags.occasion || []).includes(occ)
+                        ? isDark ? "bg-white text-blue-900 border-white" : "bg-gray-900 text-white border-gray-900"
+                        : isDark ? "bg-white/10 text-white border-white/20" : "bg-black/5 text-gray-900 border-black/20"
+                    }`}
+                  >
+                    {occ.replace("_", " ")}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="flex gap-3">
+              <button
+                onClick={() => setEditItem(null)}
+                className={`flex-1 ${isDark ? "bg-white/10 text-white" : "bg-black/10 text-gray-900"} py-3 rounded-2xl font-medium text-sm`}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveEdit}
+                disabled={editSaving}
+                className={`flex-1 ${isDark ? "bg-white text-blue-900" : "bg-gray-900 text-white"} py-3 rounded-2xl font-bold text-sm disabled:opacity-40`}
+              >
+                {editSaving ? "Saving..." : "Save Changes"}
               </button>
             </div>
           </div>

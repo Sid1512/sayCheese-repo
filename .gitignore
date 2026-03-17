@@ -1,16 +1,20 @@
-# Dependencies
-node_modules/
-
-# Environment & secrets
+# Environment variables — never commit these
 .env
 .env.local
 .env.*.local
-serviceAccountKey.json
-*-service-account*.json
 
-# Logs & temp
-*.log
+# macOS
 .DS_Store
+**/.DS_Store
+__MACOSX/
 
-# Uploads (local storage)
-uploads/
+# Logs
+*.log
+npm-debug.log*
+
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/

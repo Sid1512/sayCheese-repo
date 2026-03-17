@@ -1,22 +1,18 @@
 const express = require('express');
-const { getAdmin } = require('../config/firebase');
+const { getAdminClient } = require('../config/supabase');
 const { authMiddleware } = require('../middleware/auth');
-const { USERS } = require('../config/collections');
 
 const router = express.Router();
-const db = () => getAdmin().firestore();
+const db = () => getAdminClient();
 
 function defaultPreferences(existing = {}) {
   return {
-    default_activity: 'casual',
-    mood_selector_enabled: true,
     age: '',
     gender: '',
     height: '',
     weight: '',
     skinTone: 'Medium',
     stylePreference: [],
-    comfortPriority: 'comfort',
     ...(existing || {}),
   };
 }
@@ -24,14 +20,18 @@ function defaultPreferences(existing = {}) {
 router.get('/profile', authMiddleware, async (req, res) => {
   try {
     const userId = req.userId;
-    const snap = await db().collection(USERS).doc(userId).get();
-    if (!snap.exists) {
+    const { data, error } = await db()
+      .from('profiles')
+      .select('*')
+      .eq('id', userId)
+      .single();
+
+    if (error || !data) {
       return res.status(404).json({
         error: { code: 'USER_NOT_FOUND', message: 'User not found', status: 404 },
       });
     }
 
-    const data = snap.data() || {};
     return res.json({
       user_id: userId,
       name: data.name || '',
@@ -50,30 +50,40 @@ router.patch('/profile', authMiddleware, async (req, res) => {
   try {
     const userId = req.userId;
     const updates = req.body || {};
-    const ref = db().collection(USERS).doc(userId);
-    const current = await ref.get();
-    if (!current.exists) {
+
+    // Fetch current profile
+    const { data: current, error: fetchErr } = await db()
+      .from('profiles')
+      .select('*')
+      .eq('id', userId)
+      .single();
+
+    if (fetchErr || !current) {
       return res.status(404).json({
         error: { code: 'USER_NOT_FOUND', message: 'User not found', status: 404 },
       });
     }
 
-    const existing = current.data() || {};
     const next = {
-      ...existing,
-      updatedAt: new Date().toISOString(),
+      id: userId,
+      name: current.name,
+      email: current.email,
+      location: current.location,
+      preferences: current.preferences,
+      updated_at: new Date().toISOString(),
     };
 
     if (updates.name != null) next.name = String(updates.name).trim();
     if (updates.location !== undefined) next.location = updates.location;
     if (updates.preferences && typeof updates.preferences === 'object') {
       next.preferences = defaultPreferences({
-        ...(existing.preferences || {}),
+        ...(current.preferences || {}),
         ...updates.preferences,
       });
     }
 
-    await ref.set(next, { merge: true });
+    const { error: updateErr } = await db().from('profiles').upsert(next);
+    if (updateErr) throw new Error(updateErr.message);
 
     return res.json({
       user_id: userId,

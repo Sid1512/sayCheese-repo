@@ -1,7 +1,6 @@
 const Anthropic = require('@anthropic-ai/sdk').default;
 
-const CATEGORIES =
-  'top, bottom, footwear, thermal, jacket, scarf, hat, gloves, facemask, umbrella';
+const CATEGORIES = 'top, bottom, footwear, accessory';
 const OCCASIONS = 'casual, work, athletic, smart_casual, party';
 
 const SCHEMA_PROMPT = `
@@ -10,24 +9,17 @@ Respond with exactly one JSON object (no markdown, no code fence) with this shap
   "name": "short display name for the item",
   "description": "one sentence: fabric, fit, style",
   "category": "one of: ${CATEGORIES}",
+  "layer": "inner or outer — ONLY set this field when category is top. inner = base layers worn directly on skin (t-shirts, shirts, blouses, tank tops, vests). outer = worn over other tops (hoodies, sweatshirts, cardigans, overshirts, zip-ups, jackets, coats, parkas, windbreakers, raincoats). For any other category set this to null. NOTE: scarves, hats, gloves, thermals, umbrellas, sunglasses, facemasks = accessory category.",
   "tags": {
     "warmth": 1-5,
     "breathability": 1-5,
     "waterproof": true or false,
     "occasion": ["one or more of: ${OCCASIONS}"],
-    "color": "primary color",
-    "user_comfort": 1-5
-  },
-  "confidence": 0.0-1.0
+    "color": "primary color"
+  }
 }
-Warmth: 1=very light, 5=very warm. Breathability: 1=not breathable, 5=very breathable. User comfort: 1-5 how comfortable it likely is (use 3 if unsure).`;
+Warmth: 1=very light, 5=very warm. Breathability: 1=not breathable, 5=very breathable.`;
 
-/**
- * @param {Buffer} imageBuffer
- * @param {string} mediaType - e.g. 'image/jpeg', 'image/png'
- * @param {string} [categoryHint] - optional hint: top, bottom, footwear, etc.
- * @returns {Promise<{ name: string, description?: string, category: string, tags: object, confidence: number }>}
- */
 async function detectClothingItem(imageBuffer, mediaType, categoryHint) {
   const apiKey = process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY;
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY or CLAUDE_API_KEY is required');
@@ -47,11 +39,7 @@ async function detectClothingItem(imageBuffer, mediaType, categoryHint) {
         content: [
           {
             type: 'image',
-            source: {
-              type: 'base64',
-              media_type: mediaType,
-              data: base64,
-            },
+            source: { type: 'base64', media_type: mediaType, data: base64 },
           },
           {
             type: 'text',
@@ -80,22 +68,26 @@ async function detectClothingItem(imageBuffer, mediaType, categoryHint) {
     throw new Error(`Claude returned invalid JSON: ${text.slice(0, 200)}`);
   }
 
-  const {
-    name,
-    description,
-    category,
-    tags,
-    confidence = 0.8,
-  } = parsed;
+  const { name, description, category, layer, tags } = parsed;
 
   if (!name || !category || !tags) {
     throw new Error('Claude response missing required fields (name, category, tags)');
   }
 
-  const normalized = {
+  const normalizedCategory = String(category).trim().toLowerCase();
+
+  // layer is only valid for tops; enforce null for everything else
+  let normalizedLayer = null;
+  if (normalizedCategory === 'top') {
+    const raw = String(layer || '').trim().toLowerCase();
+    normalizedLayer = raw === 'outer' ? 'outer' : 'inner'; // default to inner if ambiguous
+  }
+
+  return {
     name: String(name).trim(),
     description: description != null ? String(description).trim() : '',
-    category: String(category).trim().toLowerCase(),
+    category: normalizedCategory,
+    layer: normalizedLayer,
     tags: {
       warmth: clamp(Number(tags.warmth), 1, 5),
       breathability: clamp(Number(tags.breathability), 1, 5),
@@ -104,12 +96,8 @@ async function detectClothingItem(imageBuffer, mediaType, categoryHint) {
         ? tags.occasion.map((o) => String(o).trim().toLowerCase())
         : [String(tags.occasion || 'casual').trim().toLowerCase()],
       color: String(tags.color || 'unknown').trim().toLowerCase(),
-      user_comfort: clamp(Number(tags.user_comfort), 1, 5),
     },
-    confidence: Math.min(1, Math.max(0, Number(confidence))),
   };
-
-  return normalized;
 }
 
 function clamp(n, min, max) {

@@ -1,10 +1,9 @@
 const express = require('express');
-const { getAdmin } = require('../config/firebase');
+const { getAdminClient } = require('../config/supabase');
 const { authMiddleware } = require('../middleware/auth');
-const { WEAR_LOGS, WARDROBE_ITEMS } = require('../config/collections');
 
 const router = express.Router();
-const db = () => getAdmin().firestore();
+const db = () => getAdminClient();
 
 function dateOnly(d) {
   return d.toISOString().slice(0, 10);
@@ -21,32 +20,34 @@ router.get('/wardrobe-utilization', authMiddleware, async (req, res) => {
     const fromStr = dateOnly(from);
     const toStr = dateOnly(to);
 
-    const [wearLogsSnap, wardrobeSnap] = await Promise.all([
+    const [{ data: logs }, { data: wardrobeItems }] = await Promise.all([
       db()
-        .collection(WEAR_LOGS)
-        .where('userId', '==', userId)
-        .where('date', '>=', fromStr)
-        .where('date', '<=', toStr)
-        .orderBy('date', 'desc')
-        .get(),
-      db().collection(WARDROBE_ITEMS).where('userId', '==', userId).get(),
+        .from('wear_logs')
+        .select('item_ids, date')
+        .eq('user_id', userId)
+        .gte('date', fromStr)
+        .lte('date', toStr)
+        .order('date', { ascending: false }),
+      db()
+        .from('wardrobe_items')
+        .select('id, name')
+        .eq('user_id', userId),
     ]);
 
     const wearCount = new Map();
     const lastWorn = new Map();
-    wearLogsSnap.docs.forEach((doc) => {
-      const e = doc.data() || {};
-      (e.itemIds || []).forEach((id) => {
-        wearCount.set(id, Number(wearCount.get(id) || 0) + 1);
+    (logs || []).forEach((e) => {
+      (e.item_ids || []).forEach((id) => {
+        wearCount.set(id, (wearCount.get(id) || 0) + 1);
         if (!lastWorn.has(id)) lastWorn.set(id, e.date || null);
       });
     });
 
-    const items = wardrobeSnap.docs.map((doc) => ({
-      item_id: doc.id,
-      name: doc.data().name || 'Item',
-      times_worn: Number(wearCount.get(doc.id) || 0),
-      last_worn_date: lastWorn.get(doc.id) || null,
+    const items = (wardrobeItems || []).map((w) => ({
+      item_id: w.id,
+      name: w.name || 'Item',
+      times_worn: wearCount.get(w.id) || 0,
+      last_worn_date: lastWorn.get(w.id) || null,
     }));
 
     const totalWears = items.reduce((sum, i) => sum + i.times_worn, 0);
@@ -58,10 +59,9 @@ router.get('/wardrobe-utilization', authMiddleware, async (req, res) => {
       to: toStr,
       total_wears: totalWears,
       items,
-      summary:
-        unwornCount > 0
-          ? `${unwornCount} items haven't been worn this ${period}.`
-          : `Great rotation this ${period}.`,
+      summary: unwornCount > 0
+        ? `${unwornCount} items haven't been worn this ${period}.`
+        : `Great rotation this ${period}.`,
     });
   } catch (err) {
     return res.status(500).json({
