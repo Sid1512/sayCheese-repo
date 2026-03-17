@@ -1,56 +1,54 @@
 # DayAdapt — API Specification
 
-**Version:** 1.0.0 | **Base URL:** `/api/v1`
+**Version:** 2.0.0 | **Base URL:** `/api/v1`
 
-For **FE and BE** alignment: build in parallel using this contract.  
-All requests require **Authentication** (see §1) unless marked **Public**.  
-All responses are `application/json`. Timestamps are ISO 8601 UTC.
+All requests require **Authentication** unless marked **Public**.
+All responses are `application/json`. Dates are `YYYY-MM-DD`. Timestamps are ISO 8601 UTC.
 
 ---
 
 ## Table of Contents
 
 1. [Authentication](#1-authentication)
-2. [User Profile & Preferences](#2-user-profile--preferences)
+2. [User Profile](#2-user-profile)
 3. [Wardrobe](#3-wardrobe)
 4. [Wear Log](#4-wear-log)
 5. [Recommendations](#5-recommendations)
-6. [Weekly Planner](#6-weekly-planner)
-7. [Wardrobe Utilization Insights](#7-wardrobe-utilization-insights)
-8. [Data Models](#8-data-models)
-9. [Error Format](#9-error-format)
+6. [Wardrobe Utilization Insights](#6-wardrobe-utilization-insights)
+7. [Data Models](#7-data-models)
+8. [Error Format](#8-error-format)
 
 ---
 
 ## 1. Authentication
 
-**Basic auth layer:** token-based. After login or register, the client sends the token on every request.
+Token-based. After login or register, send the token on every request.
 
 - **Public endpoints:** `POST /auth/register`, `POST /auth/login`
-- **All other endpoints:** require header `Authorization: Bearer <token>`
-- **Token:** returned in login/register response; use as-is until expiry (implementation-defined TTL and refresh strategy)
+- **All other endpoints:** require `Authorization: Bearer <token>`
 
 ### `POST /auth/register` — Public
 
-Register a new user.
-
 **Request**
-
 ```json
 {
   "email": "user@example.com",
   "password": "string",
-  "name": "Jane Doe"
+  "name": "Jane Doe",
+  "preferences": {
+    "age": "28",
+    "gender": "Female",
+    "height": "165",
+    "weight": "60",
+    "skinTone": "Medium",
+    "stylePreference": ["casual", "smart_casual"]
+  }
 }
 ```
 
 **Response `201`**
-
 ```json
-{
-  "user_id": "usr_abc123",
-  "token": "eyJhbGci..."
-}
+{ "user_id": "usr_abc123", "token": "eyJhbGci..." }
 ```
 
 ---
@@ -58,64 +56,45 @@ Register a new user.
 ### `POST /auth/login` — Public
 
 **Request**
-
 ```json
-{
-  "email": "user@example.com",
-  "password": "string"
-}
+{ "email": "user@example.com", "password": "string" }
 ```
 
 **Response `200`**
-
 ```json
-{
-  "user_id": "usr_abc123",
-  "token": "eyJhbGci..."
-}
+{ "user_id": "usr_abc123", "token": "eyJhbGci..." }
 ```
 
 ---
 
-### `GET /auth/me` — Optional
+### `GET /auth/me`
 
-Validate token and return current user id. Useful for FE to check session.
+Validate token and return current user id.
 
 **Response `200`**
-
 ```json
-{
-  "user_id": "usr_abc123"
-}
+{ "user_id": "usr_abc123" }
 ```
-
-**Response `401`** — Invalid or missing token.
 
 ---
 
-## 2. User Profile & Preferences
-
-Used for **location** (weather), **default activity**, and **mood** (“how do you want to feel today?”).
+## 2. User Profile
 
 ### `GET /user/profile`
 
-Returns the current user’s profile and preferences.
-
 **Response `200`**
-
 ```json
 {
   "user_id": "usr_abc123",
   "name": "Jane Doe",
   "email": "user@example.com",
-  "location": {
-    "city": "London",
-    "lat": 51.5074,
-    "lon": -0.1278
-  },
   "preferences": {
-    "default_activity": "casual",
-    "mood_selector_enabled": true
+    "age": "28",
+    "gender": "Female",
+    "height": "165",
+    "weight": "60",
+    "skinTone": "Medium",
+    "stylePreference": ["casual", "smart_casual"]
   }
 }
 ```
@@ -124,152 +103,113 @@ Returns the current user’s profile and preferences.
 
 ### `PATCH /user/profile`
 
-Update profile or preferences. Send only fields being changed.
+Send only fields being changed.
 
-**Request**
-
-```json
-{
-  "location": {
-    "city": "Manchester",
-    "lat": 53.4808,
-    "lon": -2.2426
-  },
-  "preferences": {
-    "default_activity": "office",
-    "mood_selector_enabled": false
-  }
-}
-```
-
-**Response `200`** — Full updated profile (same shape as GET).
+**Response `200`** — Full updated profile.
 
 ---
 
 ## 3. Wardrobe
 
-**Wardrobe onboarding:** fixed categories per README.
-
-- **Non-negotiables:** tops, pants, shoes.
-- **Optional:** thermals, jackets, scarves, hats, gloves, facemask, umbrella.
-
-Items are catalogued with: **description**, **warmth**, **breathability**, **waterproof**, **occasion tag**, **color**, **user comfort**.  
-Vision LLM is used to auto-detect and tag items from photos (including generating `description`).
-
 ### `GET /wardrobe`
-
-Returns all wardrobe items for the authenticated user.
 
 **Query Parameters**
 
-| Param       | Type   | Description                                                                 |
-|------------|--------|-----------------------------------------------------------------------------|
-| `category` | string | Filter by category (see [Data Models](#8-data-models) for allowed values) |
-| `occasion` | string | Filter by occasion tag                                                      |
-| `limit`    | int    | Default `50`, max `200`                                                    |
-| `offset`   | int    | Pagination                                                                  |
+| Param | Type | Description |
+|---|---|---|
+| `category` | string | Filter by category |
+| `occasion` | string | Filter by occasion tag |
+| `limit` | int | Default `50`, max `200` |
+| `offset` | int | Pagination |
 
 **Response `200`**
-
 ```json
 {
-  "total": 42,
+  "total": 14,
   "items": [
     {
       "item_id": "itm_001",
       "name": "Navy Merino Sweater",
-      "description": "Navy merino crew neck sweater, mid-weight, long sleeve",
+      "description": "Navy merino crew neck, mid-weight, long sleeve",
       "category": "top",
-      "image_url": "https://cdn.example.com/items/itm_001.jpg",
+      "layer": "inner",
+      "image_url": "https://cdn.supabase.co/...",
       "tags": {
         "warmth": 4,
         "breathability": 3,
         "waterproof": false,
         "occasion": ["casual", "smart_casual"],
-        "color": "navy",
-        "user_comfort": 5
+        "color": "navy"
       },
-      "times_worn_last_7_days": 6,
-      "times_worn_last_30_days": 6,
-      "last_worn_date": "2026-02-24",
-      "added_at": "2026-01-10T09:00:00Z",
-      "confidence": 0.92
+      "times_worn_last_7_days": 1,
+      "times_worn_last_30_days": 3,
+      "last_worn_date": "2026-03-14",
+      "added_at": "2026-01-10T09:00:00Z"
     }
   ]
 }
 ```
 
-`confidence` is optional (0–1); set when the item was created from a scan (vision LLM), null or omitted for manual entry.
-
 ---
 
 ### `POST /wardrobe/scan`
 
-Upload a photo of a clothing item. LLM auto-detects and tags it.
+Upload a photo. Claude Vision auto-detects and tags the item.
 
 **Request** — `multipart/form-data`
 
-| Field           | Type   | Description                                      |
-|-----------------|--------|--------------------------------------------------|
-| `image`         | file   | JPEG or PNG, max 10MB                            |
-| `category_hint` | string | Optional: `top`, `bottom`, `footwear`, or optional category name |
+| Field | Type | Description |
+|---|---|---|
+| `image` | file | JPEG, PNG, or WEBP, max 10MB |
+| `category_hint` | string | Optional: `top`, `bottom`, `footwear`, `accessory` |
 
 **Response `200`**
-
 ```json
 {
   "scan_id": "scn_xyz789",
   "status": "complete",
   "detected_item": {
     "name": "Olive Waterproof Parka",
-    "description": "Olive green hooded parka, waterproof shell, mid-calf length",
-    "category": "jacket",
-    "image_url": "https://cdn.example.com/scans/scn_xyz789.jpg",
+    "description": "Olive hooded parka, waterproof shell, mid-calf length",
+    "category": "top",
+    "layer": "outer",
+    "image_url": "https://cdn.supabase.co/...",
     "tags": {
       "warmth": 5,
       "breathability": 2,
       "waterproof": true,
       "occasion": ["casual", "outdoor"],
-      "color": "olive",
-      "user_comfort": 4
-    },
-    "confidence": 0.92
+      "color": "olive"
+    }
   }
 }
 ```
 
-After this, FE shows the result for confirmation, then calls `POST /wardrobe/items` to save (payload can mirror `detected_item` plus `scan_id` if needed).
+After this, the frontend shows the result for confirmation, then calls `POST /wardrobe/items` to save.
 
 ---
 
 ### `POST /wardrobe/items`
 
-Add an item (e.g. after confirming a scan result, or manual entry). Accepts same tag shape as scan output.
+Add an item after confirming a scan result.
 
 **Request**
-
 ```json
 {
   "name": "Olive Waterproof Parka",
-  "description": "Olive green hooded parka, waterproof shell, mid-calf length",
-  "category": "jacket",
-  "image_url": "https://cdn.example.com/scans/scn_xyz789.jpg",
+  "description": "Olive hooded parka, waterproof shell, mid-calf length",
+  "category": "top",
+  "layer": "outer",
+  "image_url": "https://cdn.supabase.co/...",
   "tags": {
     "warmth": 5,
     "breathability": 2,
     "waterproof": true,
-    "occasion": ["casual", "outdoor"],
-    "color": "olive",
-    "user_comfort": 4
-  },
-  "confidence": 0.92
+    "occasion": ["casual"],
+    "color": "olive"
+  }
 }
 ```
-
-| Field | Required | Notes |
-|-------|----------|-------|
-| `description` | No | Short text describing the item; can be auto-generated on scan or user-written. |
-| `confidence` | No | 0–1; from vision LLM when adding from scan. Omit for manual entry. |
 
 **Response `201`** — Created item (same shape as list item).
 
@@ -277,30 +217,26 @@ Add an item (e.g. after confirming a scan result, or manual entry). Accepts same
 
 ### `GET /wardrobe/items/:item_id`
 
-Get a single item by ID.
-
-**Response `200`** — Single item object (same shape as in list).
+**Response `200`** — Single item object.
 
 ---
 
 ### `PATCH /wardrobe/items/:item_id`
 
-Update name or tags. Send only fields to update.
+Update name, layer, or tags. Send only fields to update.
 
 **Request**
-
 ```json
 {
-  "name": "Olive Parka (hooded)",
-  "description": "Olive hooded parka, waterproof, mid-calf",
+  "name": "Olive Parka",
+  "layer": "outer",
   "tags": {
     "warmth": 5,
-    "user_comfort": 3
+    "waterproof": true,
+    "occasion": ["casual", "work"]
   }
 }
 ```
-
-Send only fields being updated. `description` is optional.
 
 **Response `200`** — Full updated item.
 
@@ -308,43 +244,30 @@ Send only fields being updated. `description` is optional.
 
 ### `DELETE /wardrobe/items/:item_id`
 
-Remove an item from the wardrobe.
-
 **Response `204`** — No body.
 
 ---
 
 ## 4. Wear Log
 
-**Outfit tracking:** user gets ~2 options per category (top, pant, accessory) plus “other”.  
-If they pick “other”, they choose from their wardrobe. Selection is logged so the LLM avoids recommending the same outfit the next day.
-
 ### `POST /wear-log`
 
-Save what the user is wearing today (after they’ve chosen from recommendations or from wardrobe).
+Log what the user is wearing. If a log already exists for this date, item IDs are merged and the new activity is appended to the activities array. Wear counts are only incremented for newly added items.
 
 **Request**
-
 ```json
 {
-  "date": "2026-02-28",
+  "date": "2026-03-17",
   "activity": "casual",
   "item_ids": ["itm_001", "itm_045", "itm_078"]
 }
 ```
 
-| Field        | Required | Notes                                                |
-|-------------|----------|------------------------------------------------------|
-| `date`      | No       | ISO date; defaults to today                          |
-| `activity`  | No       | e.g. `gym`, `office`, `outdoor_brunch`, `casual`, `formal` |
-| `item_ids`  | Yes      | IDs of items worn (from recommendation or wardrobe)  |
-
 **Response `201`**
-
 ```json
 {
   "log_id": "log_abc456",
-  "date": "2026-02-28",
+  "date": "2026-03-17",
   "items_logged": 3
 }
 ```
@@ -353,25 +276,22 @@ Save what the user is wearing today (after they’ve chosen from recommendations
 
 ### `GET /wear-log`
 
-Retrieve wear history (for tracking and insights).
-
 **Query Parameters**
 
-| Param     | Type   | Description           |
-|-----------|--------|-----------------------|
-| `from`    | date   | Start date (YYYY-MM-DD) |
-| `to`      | date   | End date              |
-| `item_id` | string | Filter by item        |
+| Param | Type | Description |
+|---|---|---|
+| `from` | date | Start date `YYYY-MM-DD` |
+| `to` | date | End date |
+| `item_id` | string | Filter by item |
 
 **Response `200`**
-
 ```json
 {
   "entries": [
     {
       "log_id": "log_abc456",
-      "date": "2026-02-28",
-      "activity": "casual",
+      "date": "2026-03-17",
+      "activities": ["casual", "gym"],
       "items": [
         { "item_id": "itm_001", "name": "Navy Merino Sweater" }
       ]
@@ -380,230 +300,197 @@ Retrieve wear history (for tracking and insights).
 }
 ```
 
+Note: `activities` is an array — multiple occasions can be logged on the same date.
+
+---
+
+### `PATCH /wear-log/:log_id/remove-item`
+
+Remove a single item from a log entry. If no items remain, the log is deleted entirely. Wear counts are recomputed for the removed item.
+
+**Request**
+```json
+{ "item_id": "itm_001" }
+```
+
+**Response `200`**
+```json
+{
+  "removed": "itm_001",
+  "log_id": "log_abc456",
+  "items_remaining": 2
+}
+```
+
 ---
 
 ## 5. Recommendations
 
-**Daily outfit recommendation:** weather-aware, with algorithmic pre-filter and LLM reasoning.  
-Returns ~2 options per fixed category (top, bottom, footwear) and from optional categories when relevant; plus a short human-readable explanation.  
-Supports **activity-based customisation** and **mood** (enclothed cognition).  
-**Health angles:** thermal safety, UV protection, activity-matched breathability.
-
-**Location (weather):** Latitude and longitude are **provided by the client (frontend)**. The frontend should obtain them from the browser Geolocation API, the user’s saved profile (e.g. `GET /user/profile`), or user-entered address. When location is sent, the API fetches weather and applies weather-based pre-filtering and includes weather in the response; when omitted, recommendations run without weather.
-
----
+Location (lat/lon) is provided by the frontend from the browser Geolocation API. When provided, weather is fetched and used for both pre-filtering and LLM reasoning.
 
 ### `GET /recommendations/candidates`
 
-Pre-filtered candidate items per slot (for UI or before calling `POST /recommendations`). Uses category, occasion, recency, and (when location is provided) weather-based warmth and rain filters.
+Pre-filtered candidate items per slot.
 
-**Query parameters**
+**Query Parameters**
 
-| Param             | Type   | Required | Notes |
-|-------------------|--------|----------|--------|
-| `activity`        | string | No       | e.g. `work`, `gym`, `casual`, `outdoor`, `formal` |
-| `date`            | string | No       | `YYYY-MM-DD`; default today |
-| `limit_per_slot`  | number | No       | Max items per slot (default 15, max 50) |
-| `lat`             | number | No       | **From frontend:** latitude for weather (e.g. Geolocation or profile) |
-| `lon`             | number | No       | **From frontend:** longitude for weather |
-
-When `lat` and `lon` are both present and valid, the API fetches weather and applies warmth/rain pre-filtering and returns `weather` in the response. Omit for no weather.
+| Param | Type | Description |
+|---|---|---|
+| `activity` | string | `casual`, `work`, `gym`, `party` |
+| `date` | string | `YYYY-MM-DD`, default today |
+| `limit_per_slot` | number | Default 25, max 50 |
+| `lat` | number | Latitude for weather |
+| `lon` | number | Longitude for weather |
 
 **Response `200`**
-
 ```json
 {
-  "date": "2026-02-28",
+  "date": "2026-03-17",
   "activity": "casual",
   "candidates": {
-    "top": [ { "item_id": "itm_001", "name": "...", "description": "...", "category": "top", "tags": {}, "last_worn_date": null } ],
+    "top_inner": [{ "item_id": "itm_001", "name": "...", "tags": {}, "layer": "inner", "last_worn_date": null }],
+    "top_outer": [],
     "bottom": [],
     "footwear": [],
     "optional": []
   },
-  "counts": { "top": 5, "bottom": 8, "footwear": 3, "optional": 2 },
-  "weather": { "temperature_c": 7, "feels_like_c": 4, "condition": "rainy", "rain_probability": 0.85, "uv_index": 2, "humidity": 82, "wind_kph": 22 }
+  "counts": { "top_inner": 4, "top_outer": 2, "bottom": 3, "footwear": 2, "optional": 1 },
+  "weather": { "temperature_c": 7, "feels_like_c": 4, "is_rainy_or_snowy": true, "rain_probability": 0.85, "uv_index": 2 }
 }
 ```
-
-`weather` is only present when the request included `lat` and `lon`.
 
 ---
 
 ### `POST /recommendations`
 
-Generate a daily outfit recommendation (pre-filter + LLM selection).
+Generate a daily outfit recommendation.
 
 **Request**
-
 ```json
 {
-  "date": "2026-02-28",
+  "date": "2026-03-17",
   "activity": "casual",
-  "mood": "relaxed",
-  "location": {
-    "lat": 51.5074,
-    "lon": -0.1278
-  }
+  "location": { "lat": 51.5074, "lon": -0.1278 }
 }
 ```
 
-| Field      | Required | Notes                                                                 |
-|------------|----------|-----------------------------------------------------------------------|
-| `date`     | No       | Defaults to today                                                     |
-| `activity` | No       | e.g. `work`, `gym`, `casual`, `outdoor`, `formal` — adjusts occasion and breathability |
-| `mood`     | No       | `confident`, `relaxed`, `energised` — “how do you want to feel today?” |
-| `location` | No       | **From frontend:** `{ "lat": number, "lon": number }` for weather (e.g. Geolocation API or profile). When present, weather is fetched and used; when omitted, no weather. May fall back to user profile location if available. |
-
 **Response `200`**
-
 ```json
 {
   "recommendation_id": "rec_001",
-  "date": "2026-02-28",
-  "weather": {
-    "temperature_c": 7,
-    "feels_like_c": 4,
-    "condition": "rainy",
-    "rain_probability": 0.85,
-    "uv_index": 2,
-    "humidity": 82,
-    "wind_kph": 22
-  },
-  "health_insights": [
-    {
-      "type": "thermal",
-      "severity": "warning",
-      "message": "Temperature drops to 3°C after 6pm — your outer layer will be important."
-    },
-    {
-      "type": "uv",
-      "severity": "info",
-      "message": "High UV today. We've prioritised long sleeves and coverage."
-    }
-  ],
+  "date": "2026-03-17",
   "outfit": {
-    "top": {
-      "item_id": "itm_001",
-      "name": "Navy Merino Sweater",
-      "reason": "Warm and breathable for the cold, damp conditions."
-    },
-    "bottom": {
-      "item_id": "itm_045",
-      "name": "Dark Navy Chinos",
-      "reason": "Water marks won't show on dark fabric."
-    },
-    "footwear": {
-      "item_id": "itm_078",
-      "name": "Chelsea Boots",
-      "reason": "Water-resistant and warm. Last worn 5 days ago."
-    },
-    "optional": [
-      {
-        "item_id": "itm_022",
-        "name": "Olive Waterproof Parka",
-        "reason": "Your only fully waterproof option — essential today."
-      }
-    ]
+    "top_inner": { "item_id": "itm_001", "name": "Navy Merino Sweater", "reason": "Warm base layer for cold conditions." },
+    "top_outer": { "item_id": "itm_022", "name": "Olive Waterproof Parka", "reason": "Your only waterproof outer layer." },
+    "bottom": { "item_id": "itm_045", "name": "Dark Navy Chinos", "reason": "Water marks won't show on dark fabric." },
+    "footwear": { "item_id": "itm_078", "name": "Chelsea Boots", "reason": "Water-resistant and warm." },
+    "optional": [{ "item_id": "itm_033", "name": "Grey Scarf", "reason": "Extra warmth for the commute." }]
   },
-  "explanation": "It's 7°C with heavy rain expected after 2pm. We've built an outfit around your waterproof parka and merino sweater to keep you warm and dry.",
-  "alternatives": [
-    {
-      "replaces": "top",
-      "item_id": "itm_033",
-      "name": "Charcoal Fleece",
-      "reason": "Slightly warmer alternative if you're feeling cold."
-    }
-  ]
+  "accessories": ["Umbrella recommended — 85% rain chance", "Sunglasses not needed today"],
+  "explanation": "It's 7°C with heavy rain expected. We've prioritised your waterproof parka and warm merino base.",
+  "alternatives": [{ "replaces": "top_inner", "item_id": "itm_009", "name": "Charcoal Fleece", "reason": "Slightly warmer alternative." }],
+  "health_insights": [{ "type": "rain", "severity": "warning", "message": "85% rain chance — waterproof outer layer recommended." }],
+  "activities": ["Grab a coffee at your local café", "Indoor workout at the gym", "Catch up on reading"],
+  "readiness_score": 87,
+  "weather": { "temperature_c": 7, "feels_like_c": 4, "is_rainy_or_snowy": true, "rain_probability": 0.85, "uv_index": 2 }
 }
 ```
 
-`outfit` covers non-negotiables (top, bottom, footwear) and can include `optional` (e.g. jacket, scarf) when weather or activity demand it. `alternatives` provides roughly a second option per slot where applicable.
+`top_outer` is omitted from the outfit when weather is warm and occasion doesn't call for it.
 
 ---
 
-## 7. Wardrobe Utilization Insights
-
-**Weekly/monthly wardrobe utilization:** so the user can see which items are worn less often.
+## 6. Wardrobe Utilization Insights
 
 ### `GET /insights/wardrobe-utilization`
 
 **Query Parameters**
 
-| Param   | Type   | Description                          |
-|---------|--------|--------------------------------------|
-| `period`| string | `week` or `month`; default `month`   |
+| Param | Type | Description |
+|---|---|---|
+| `period` | string | `week` or `month`, default `week` |
 
 **Response `200`**
-
 ```json
 {
-  "period": "month",
-  "from": "2026-02-01",
-  "to": "2026-02-28",
-  "total_wears": 42,
+  "period": "week",
+  "from": "2026-03-10",
+  "to": "2026-03-17",
+  "total_wears": 12,
   "items": [
-    {
-      "item_id": "itm_001",
-      "name": "Navy Merino Sweater",
-      "times_worn": 8,
-      "last_worn_date": "2026-02-24"
-    },
-    {
-      "item_id": "itm_099",
-      "name": "Green Linen Shirt",
-      "times_worn": 0,
-      "last_worn_date": null
-    }
+    { "item_id": "itm_001", "name": "Navy Merino Sweater", "times_worn": 3, "last_worn_date": "2026-03-17" },
+    { "item_id": "itm_099", "name": "Green Linen Shirt", "times_worn": 0, "last_worn_date": null }
   ],
-  "summary": "5 items haven't been worn this month — consider them for next week."
+  "summary": "3 items haven't been worn this week — consider them for your next outfit."
 }
 ```
 
-Items can be sorted by `times_worn` (e.g. ascending) to highlight underused pieces.
-
 ---
 
-## 8. Data Models
+## 7. Data Models
 
-### Wardrobe categories (README-aligned)
+### Categories
 
-- **Non-negotiables:** `top`, `bottom`, `footwear`
-- **Optional:** `thermal`, `jacket`, `scarf`, `hat`, `gloves`, `facemask`, `umbrella`
+| Category | Description |
+|---|---|
+| `top` | All tops — use `layer` to distinguish inner vs outer |
+| `bottom` | Trousers, jeans, shorts, skirts |
+| `footwear` | All shoes — never excluded from recommendations |
+| `accessory` | Scarves, hats, gloves, thermals, umbrellas, sunglasses, facemasks |
+
+### Layer (tops only)
+
+| Value | Examples |
+|---|---|
+| `inner` | T-shirts, shirts, blouses, tank tops |
+| `outer` | Hoodies, cardigans, jackets, coats, raincoats |
+| `null` | Non-top categories |
+
+### Occasions
+
+`casual` `work` `athletic` `smart_casual` `party` `formal`
+
+### Activity → Occasion mapping
+
+| Activity | Occasion filter |
+|---|---|
+| `gym` | `athletic` |
+| `work` | `work`, `office`, `formal`, `smart_casual` |
+| `party` | `party`, `formal`, `smart_casual` |
+| `casual` | No filter (all items) |
 
 ### ClothingItem
 
-| Field                | Type    | Description |
-|----------------------|---------|-------------|
-| `item_id`            | string  | Unique identifier |
-| `name`               | string  | Display name |
-| `description`        | string  | Short text describing the item (e.g. fabric, fit, style); from vision LLM on scan or user-editable |
-| `category`           | enum    | One of the categories above |
-| `image_url`          | string  | Hosted image URL |
-| `times_worn`         | int     | Lifetime wear count |
-| `last_worn_date`     | date    | ISO date or null |
-| `added_at`           | string  | ISO 8601 UTC |
-| `tags.warmth`        | int 1–5 | 1 = very light, 5 = very warm |
-| `tags.breathability` | int 1–5 | 1 = not breathable, 5 = very breathable |
-| `tags.waterproof`    | boolean | — |
-| `tags.occasion`      | string[]| e.g. `casual`, `work`, `formal`, `outdoor`, `athletic`, `smart_casual` |
-| `tags.color`         | string  | Primary color label |
-| `tags.user_comfort`  | int 1–5 | How comfortable the user finds this item |
-| `confidence`         | float 0–1 \| null | Vision LLM confidence when item was created from scan; null for manual entry |
+| Field | Type | Description |
+|---|---|---|
+| `item_id` | string | Unique identifier (`itm_...`) |
+| `name` | string | Display name |
+| `description` | string | One sentence: fabric, fit, style |
+| `category` | enum | `top`, `bottom`, `footwear`, `accessory` |
+| `layer` | enum \| null | `inner` or `outer` for tops; null otherwise |
+| `image_url` | string | Supabase Storage public URL |
+| `tags.warmth` | int 1–5 | 1=very light, 5=very warm |
+| `tags.breathability` | int 1–5 | 1=not breathable, 5=very breathable |
+| `tags.waterproof` | boolean | — |
+| `tags.occasion` | string[] | One or more occasion values |
+| `tags.color` | string | Primary color |
+| `times_worn_last_7_days` | int | Updated on every wear log |
+| `times_worn_last_30_days` | int | Updated on every wear log |
+| `last_worn_date` | date \| null | Not set for footwear |
+| `added_at` | timestamp | ISO 8601 UTC |
 
-### Activity (examples)
+### WearLog entry (GET response)
 
-`casual` `work` `gym` `outdoor` `formal` `outdoor_brunch` `office`
-
-### Mood (enclothed cognition)
-
-`confident` `relaxed` `energised`
+| Field | Type | Description |
+|---|---|---|
+| `log_id` | string | Unique identifier (`log_...`) |
+| `date` | date | Location-aware date |
+| `activities` | string[] | All occasions logged that day |
+| `items` | array | `{ item_id, name }` for each logged item |
 
 ---
 
-## 9. Error Format
-
-All errors use this structure:
+## 8. Error Format
 
 ```json
 {
@@ -615,18 +502,15 @@ All errors use this structure:
 }
 ```
 
-**Common codes**
-
-| Code                    | HTTP | Description |
-|-------------------------|------|-------------|
-| `UNAUTHORIZED`           | 401  | Missing or invalid token |
-| `FORBIDDEN`              | 403  | Resource belongs to another user |
-| `ITEM_NOT_FOUND`         | 404  | Wardrobe item does not exist |
-| `SCAN_FAILED`            | 422  | Vision LLM could not process the image |
-| `WEATHER_UNAVAILABLE`    | 503  | Weather API unreachable |
-| `RECOMMENDATION_FAILED`  | 503  | LLM recommendation could not be generated |
-| `VALIDATION_ERROR`      | 400  | Request body failed validation |
+| Code | HTTP | Description |
+|---|---|---|
+| `UNAUTHORIZED` | 401 | Missing or invalid token |
+| `FORBIDDEN` | 403 | Resource belongs to another user |
+| `ITEM_NOT_FOUND` | 404 | Wardrobe item does not exist |
+| `NOT_FOUND` | 404 | Wear log entry does not exist |
+| `VALIDATION_ERROR` | 400 | Request body failed validation |
+| `INTERNAL_ERROR` | 500 | Unexpected server error |
 
 ---
 
-*DayAdapt API v1.0 — Aligned with README features and basic auth. Last updated February 2026.*
+*DayAdapt API v2.0 — Last updated March 2026.*

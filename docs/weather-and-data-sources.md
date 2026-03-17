@@ -1,154 +1,146 @@
 # Weather & Environmental Data Sources
 
-## 1. Where Each Metric Comes From
+## 1. Data Sources
 
-We use **Open-Meteo** (free, no API key) with two endpoints:
+We use **Open-Meteo** (free, no API key) with two endpoints, and **Nominatim** for reverse geocoding.
 
-| Metric | Source | Open-Meteo endpoint | Notes |
-|--------|--------|---------------------|--------|
-| **Temperature** | Open-Meteo Weather | `temperature_2m` | Current / hourly |
-| **Feels-like temp** | Open-Meteo Weather | `apparent_temperature` | Accounts for wind, humidity (wind chill / heat index effect) |
-| **Wind chill** | Open-Meteo Weather | Same as above | `apparent_temperature` is the “feels like” including wind |
-| **UV index** | Open-Meteo Weather | `uv_index` (daily) or `uv_index_clear_sky` | Daily max typical for outfit advice |
-| **Visibility** | Open-Meteo Weather | `visibility` | In metres; important for running/safety |
-| **Wind speed** | Open-Meteo Weather | `wind_speed_10m`, `wind_gusts_10m` | For wind chill and “windy day” logic |
-| **Rain / condition** | Open-Meteo Weather | `weather_code`, `precipitation_probability`, `rain`, `snowfall` | For waterproof / layer logic |
-| **Humidity** | Open-Meteo Weather | `relative_humidity_2m` | For breathability |
-| **AQI** | Open-Meteo Air Quality | `us_aqi` or `european_aqi` | Separate Air Quality API call, same lat/lon |
-| **Pollen** | Open-Meteo Air Quality | `pollen_*` (e.g. grass, tree, weed) | Optional; coverage best in Europe during pollen season |
-
-### API calls in the backend
-
-- **Weather:** `GET https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=...&daily=uv_index,...&current=...`
-- **Air quality (AQI + optional pollen):** `GET https://air-quality.api.open-meteo.com/v1/air-quality?latitude={lat}&longitude={lon}&hourly=us_aqi,pollen_grass,...`
-
-No API keys required.
+| Metric | Source | Field | Notes |
+|---|---|---|---|
+| Temperature | Open-Meteo Weather | `temperature_2m` | Current + hourly |
+| Feels-like | Open-Meteo Weather | `apparent_temperature` | Accounts for wind + humidity |
+| UV index | Open-Meteo Weather | `uv_index` | Daily max |
+| Wind speed | Open-Meteo Weather | `wind_speed_10m`, `wind_gusts_10m` | — |
+| Rain / condition | Open-Meteo Weather | `weather_code`, `precipitation_probability`, `rain`, `snowfall` | WMO codes |
+| Humidity | Open-Meteo Weather | `relative_humidity_2m` | — |
+| Rain probability | Open-Meteo Weather | `precipitation_probability` | Hourly, next 8hrs |
+| AQI | Open-Meteo Air Quality | `us_aqi` | Separate endpoint, same lat/lon |
+| Pollen | Open-Meteo Air Quality | `pollen_grass`, `pollen_tree`, `pollen_weed` | Best coverage in Europe |
+| Location name | Nominatim | `address.city` / `town` / `village` | Reverse geocode from lat/lon |
 
 ---
 
-## 2. Pre-filter vs LLM: Two-Stage Filtering
+## 2. Timezone Handling
 
-- **Stage 1 — Database pre-filter:** We **fetch weather first** (Open-Meteo) when location (lat/lon) is provided. Then we narrow the candidate set using: **category**, **occasion vs activity**, **wear recency**, and (using the fetched weather) **warmth** and **rain/waterproof** rules. The same weather object is returned with the candidates so the LLM can use it without a second API call.
-- **Stage 2 — LLM filtering:** The model receives the **already-fetched weather** + environment + mood + the pre-filtered list, and applies remaining weather nuance (UV, visibility, wind, AQI, pollen), health insights, and mood-based choice and explanations.
+Open-Meteo returns `current.time` already expressed in the **location's local timezone** (e.g. `"2026-03-17T22:30"` for IST). The `timezone` field (e.g. `"Asia/Kolkata"`) is also returned.
 
----
+All date comparisons in the app — wear log dates, "Today/Yesterday" labels, recommendation cache keys, history range — use `locationDate(currentTime, timezone)` from `weather.js`. This function:
 
-## 3. Stage 1: Database Pre-filter (with weather-based warmth and rain)
+1. Splits `current.time` on `"T"` to get the local date string directly
+2. Falls back to `Intl.DateTimeFormat` with the IANA timezone string
+3. Final fallback to device local date
 
-When the recommendation flow is run with a location (lat/lon), we call the **weather API once**, then apply all filters below. When no location is provided, we skip weather and apply only category, occasion, and recency.
-
-### 3.1 Category (required slots)
-
-- **Non-negotiables:** For the recommendation request we need at least one candidate per slot. Query items where `category` is:
-  - `top` for the top slot
-  - `bottom` for the bottom slot  
-  - `footwear` for the footwear slot
-- **Optionals:** Query items where `category` is one of: `thermal`, `jacket`, `scarf`, `hat`, `gloves`, `facemask`, `umbrella`. These are passed to the LLM as optional; the LLM decides if weather/activity need them.
-- **Rule:** If for any non-negotiable slot the query returns zero items, do **not** remove the slot; return whatever the user has (e.g. one top). No “relaxing” of weather rules here — we only have DB metrics.
-
-### 3.2 Activity ↔ occasion (database only)
-
-- We have `activity` from the request (e.g. `gym`, `office`, `casual`, `formal`, `outdoor_brunch`).
-- We have `tags.occasion` on each item (e.g. `["casual","smart_casual"]`).
-- **Include** items where `tags.occasion` has at least one value that matches the activity (or a mapping, e.g. `office` → allow `work`, `office`, `smart_casual`, `formal`).
-- **Mapping examples:**  
-  - `gym` → include if `athletic` in occasion  
-  - `office` / `work` → include if `work`, `office`, `formal`, `smart_casual` in occasion  
-  - `formal` → include if `formal` or `smart_casual` in occasion  
-  - `outdoor` / `outdoor_brunch` → include if `outdoor` or `casual` in occasion  
-  - `casual` → include all (no occasion filter, or allow any)
-- If after this filter a slot has no items, **drop the activity filter** for that slot only so we still send something to the LLM (the LLM can then say “no perfect match for office, but here’s a casual option”).
-
-### 3.3 Wear recency (avoid repetition)
-
-- We have `last_worn_date` (and optionally `times_worn_last_7_days`) in the DB.
-- **Exclude** items where `last_worn_date` is within the last **2 days** (configurable window). So if today is 2026-02-28, exclude items with `last_worn_date` in [2026-02-26, 2026-02-27, 2026-02-28].
-- **Sort** candidates by `last_worn_date` ascending (null or oldest first), so less recently worn items are preferred when we pass a limited list to the LLM.
-
-### 3.4 Warmth (weather-based, when weather is available)
-
-- We use **feels_like** (apparent temperature) from the weather API.
-- **Cold (feels_like &lt; 10°C):** Include only items where `tags.warmth >= 3` (mid to very warm). Exclude very light layers.
-- **Hot (feels_like &gt; 25°C):** Include only items where `tags.warmth <= 2` **and** `tags.breathability >= 3`. Exclude heavy or non-breathable items.
-- **Mild (10–25°C):** No warmth filter; all items pass.
-
-Thresholds are configurable (e.g. 10°C and 25°C) in the backend. If weather was not fetched (no lat/lon), this step is skipped.
-
-### 3.5 Rain / waterproof (weather-based, when weather is available)
-
-- We use **weather_code** (WMO) and **precipitation_probability** from the weather API. Rain is “significant” when the condition is rain/snow (e.g. WMO codes 61–67, 71–77, 80–82) or when max hourly precipitation probability ≥ 50%.
-- **Footwear:** When rain is significant, include only items where `tags.waterproof === true`. If that yields zero items, **drop the filter** and keep all footwear (LLM can still prefer waterproof in Stage 2).
-- **Jacket and umbrella (in optional list):** When rain is significant, include only jacket/umbrella items where `tags.waterproof === true`. If that yields zero optional items, drop the filter for optionals.
-- **Top and bottom:** No rain filter in Stage 1 (LLM handles underlayers).
-
-If weather was not fetched, this step is skipped.
-
-### 3.6 What we do *not* do in the database pre-filter
-
-- No UV, visibility, AQI, pollen, or wind rules — those are LLM-only.
-- No scoring by “boost” from weather beyond the include/exclude rules above.
-
-**Output of Stage 1:** Per-slot lists of full item objects (including `name`, `category`, `tags`, `description`, `last_worn_date`, etc.) and the **weather object** (temperature, feels_like, condition, rain_probability, etc.) so the LLM receives the same weather without a second API call. Cap list size per slot (e.g. top 10–15).
+Device UTC (`new Date().toISOString()`) is never used for user-facing date logic.
 
 ---
 
-## 4. Stage 2: LLM Filtering (Weather, Health, Mood)
+## 3. Two-Stage Recommendation Engine
 
-The LLM receives:
+### Stage 1 — Algorithmic Pre-filter (backend)
 
-- **Weather & environment:** temperature, feels-like, condition, rain probability, UV index, visibility, wind speed/gusts, humidity, AQI, optional pollen.
-- **Activity** and **mood** from the request.
-- **Pre-filtered items** per slot (top, bottom, footwear, optional), each with: `item_id`, `name`, `description`, `category`, `tags` (warmth, breathability, waterproof, occasion, color, user_comfort), `last_worn_date`.
+Runs first. Narrows the wardrobe to candidates per slot before the LLM sees anything.
+
+**Slot model:**
+
+| Slot | Type | Description |
+|---|---|---|
+| `top_inner` | Mandatory | Base layer tops (layer=inner or null) |
+| `top_outer` | Optional | Outer layer tops (layer=outer) |
+| `bottom` | Mandatory | — |
+| `footwear` | Mandatory | Never filtered by wear count |
+| `optional` | Optional | All accessories |
+
+**Filters applied:**
+
+**Occasion match** — Items are sorted by whether their `tags.occasion` matches the activity's occasion filter. Non-matching items are not removed — they're just ranked lower. Fallback: if no items match, all items are passed through.
+
+Activity → occasion mapping:
+- `gym` → `athletic`
+- `work` → `work`, `office`, `formal`, `smart_casual`
+- `party` → `party`, `formal`, `smart_casual`
+- `casual` → no filter
+
+**Weekly wear count filter** — Items worn too many times this week are excluded. Uses `times_worn_last_7_days` stored on each wardrobe item.
+
+| Slot | Max wears per week |
+|---|---|
+| `top_inner` / `bottom` | 2 |
+| `top_outer` | 5 |
+| `footwear` | Never excluded |
+| `accessory` | Never excluded |
+
+For `gym` activity, `top_inner` and `bottom` skip the wear limit entirely.
+
+**Fallback:** If filtering leaves fewer than 3 candidates in a slot, all items are used so the LLM always has a real choice.
+
+**Rain preference** — When rain probability ≥ 50%, waterproof items are sorted to the top of footwear and optional slots (not excluded, just preferred).
+
+### Stage 2 — LLM Selection (Claude Sonnet)
+
+Claude receives the pre-filtered candidates per slot plus the full weather context and reasons over them to pick the final outfit.
 
 The LLM is responsible for:
+- Final item selection with reasons
+- `top_outer` inclusion decision (cold, rainy, or occasion warrants it)
+- Accessory text suggestions (e.g. "Bring an umbrella")
+- Health insights (UV, rain, temperature drop, AQI, pollen)
+- Activity suggestions (3–4 things to do today)
+- Gym special rule: prioritise athletic items over warmth; handle cold/rain commute via accessory suggestions not the outfit itself
 
-### 4.1 Temperature / feels-like
+**Readiness score** is computed deterministically server-side (not by the LLM):
 
-- Prefer **warmth 4–5** when feels-like is cold (e.g. &lt; 10°C); prefer **warmth 1–2** and **high breathability** when hot (e.g. &gt; 25°C); mid-range warmth for mild days.
-- Suggest **optional** layers (jacket, scarf, hat, thermals) when feels-like is low or dropping later.
+| Component | Max pts | Logic |
+|---|---|---|
+| Slot coverage | 30 | 10 per filled mandatory slot |
+| Warmth match | 30 | Avg warmth vs ideal for feels_like temp |
+| Rain readiness | 20 | Waterproof footwear + outer when rainy |
+| Breathability | 10 | Avg breathability when feels_like > 22°C |
 
-### 4.2 Rain / precipitation
-
-- Prefer **waterproof** for outer layer and footwear when rain probability is high or condition is rainy/snowy; treat non-waterproof as underlayers only when appropriate.
-
-### 4.3 Wind
-
-- Prefer items that stay put in wind (e.g. close-fitting, wind-resistant) when wind speed/gusts are high; factor wind into “feels like” when explaining.
-
-### 4.4 UV index
-
-- When UV is high (e.g. &gt; 5), prefer more coverage (long sleeves, hat); when very high (&gt; 7), strongly prefer coverage and mention UV in health_insights.
-
-### 4.5 Visibility (e.g. running)
-
-- When visibility is low and activity is running/outdoor, prefer brighter or high-vis items when the item’s `description` or `tags.color` suggests it; add a safety note in health_insights if relevant.
-
-### 4.6 AQI
-
-- When AQI is high (e.g. &gt; 100), prefer facemask in optionals if available and mention air quality in health_insights.
-
-### 4.7 Pollen (optional)
-
-- When pollen is high, prefer facemask and coverage; optionally mention in explanation.
-
-### 4.8 Mood-based filtering (enclothed cognition)
-
-- **Mood** is “how do you want to feel today?” — values: `confident`, `relaxed`, `energised`. The LLM uses this to bias **which** items it picks from the shortlist and **how it explains** them, not to add new items.
-- **How the LLM applies mood:**
-  - **Confident:** Prefer items that read as put-together and intentional: structured silhouettes, “sharp” or “polished” pieces (e.g. blazers, tailored trousers, clean lines). In `tags`, prefer `occasion` like `formal`, `smart_casual`, `work`. In `description`, favour items that sound structured, fitted, or classic. The explanation can mention feeling confident and ready for the day.
-  - **Relaxed:** Prefer items that read as comfortable and low-effort: soft fabrics, loose fits, cosy layers. Prefer high `user_comfort` and `occasion` like `casual`. Use `description` to pick “soft”, “loose”, “comfortable” items. Explanation can emphasise comfort and ease.
-  - **Energised:** Prefer items that read as active or uplifting: sporty, bright colors, breathable/athletic pieces. Prefer `occasion` like `athletic`, `outdoor` and higher `breathability`. Use `description` for “lightweight”, “breathable”, “bright”, “sporty”. Explanation can mention feeling ready to move or that the outfit supports an active day.
-- **Prompt instructions for mood:** In the system/user prompt, we explicitly tell the LLM: “The user’s mood today is {mood}. Use this to favour items whose style and description align with that feeling (confident → structured and sharp; relaxed → comfortable and soft; energised → sporty and breathable). Mention the mood in your explanation only when it naturally fits.”
-- **Fallback:** If mood is omitted or null, the LLM ignores mood and chooses purely on weather + activity.
+Raw score is out of 90 (comfort removed), normalised to 100.
 
 ---
 
-## 5. Summary
+## 4. Weather Object Shape
 
-| Layer | What we use | Who does it |
-|-------|-------------|-------------|
-| **Weather fetch** | Open-Meteo (once per request when lat/lon provided) | Backend (weather service) |
-| **Database pre-filter** | Category, `tags.occasion` vs activity, `last_worn_date` (exclude last 2 days; sort by recency), **warmth** (feels_like vs `tags.warmth`/`tags.breathability`), **rain** (waterproof for footwear and jacket/umbrella when rainy) | Backend (prefilter service) |
-| **LLM filtering** | Same weather + pre-filtered list; remaining nuance (wind, UV, visibility, AQI, pollen), health insights, **mood** | LLM (prompt + model) |
+Returned alongside recommendations and candidates when lat/lon is provided:
 
-Weather is fetched once; the same object is used for the pre-filter and passed through to the LLM. Warmth and rain are applied in the DB pre-filter when weather is available; the LLM still refines choices and writes explanations.
+```json
+{
+  "temperature_c": 7.2,
+  "feels_like_c": 3.1,
+  "humidity_pct": 82,
+  "wind_kph": 18,
+  "wind_gusts_kph": 31,
+  "weather_code": 63,
+  "weather_description": "Moderate rain",
+  "is_rainy_or_snowy": true,
+  "rain_probability": 0.85,
+  "uv_index": 1,
+  "current": {
+    "time": "2026-03-17T14:30",
+    "temperature_2m": 7.2,
+    "apparent_temperature": 3.1,
+    "precipitation": 0.4,
+    "weather_code": 63,
+    "wind_speed_10m": 18,
+    "uv_index": 1
+  },
+  "hourly": {
+    "time": ["2026-03-17T00:00", "..."],
+    "temperature_2m": [5.1, "..."],
+    "precipitation_probability": [20, "..."]
+  },
+  "environmental": {
+    "us_aqi": 42,
+    "pollen_grass": 0.2,
+    "pollen_tree": 1.1,
+    "pollen_weed": 0.0
+  },
+  "timezone": "Europe/London"
+}
+```
+
+---
+
+## 5. Caching
+
+Recommendations are cached in `localStorage` keyed by `{ user_id, date, occasion, wardrobe_signature }`. The wardrobe signature is a sorted hash of all item IDs, tags, and last_worn_dates — so the cache is automatically invalidated when any item changes or a wear is logged.

@@ -1,31 +1,45 @@
 # DayAdapt
 
-A weather-aware outfit recommendation app that learns your wardrobe and suggests daily outfits based on real-time conditions, your activity, and how you want to feel.
+A weather-aware outfit recommendation app that learns your wardrobe and suggests daily outfits based on real-time weather, your activity, and wear history.
 
 ---
 
 ## What It Does
 
-**Wardrobe Onboarding** — Upload photos of your clothing. Claude Vision auto-tags each item with warmth, breathability, waterproofing, occasion, color, and comfort rating. Items are organized into essentials (tops, pants, shoes) and optionals (thermals, jackets, scarves, hats, gloves, etc.).
+**Wardrobe Scanning** — Upload photos of your clothing. Claude Vision auto-tags each item with warmth, breathability, waterproofing, occasion, and color. Tops are classified as inner (t-shirts, shirts) or outer (hoodies, jackets, coats). All other accessories (scarves, hats, gloves, thermals, umbrellas) fall under a single accessory category.
 
-**Daily Outfit Recommendation** — A three-layer engine: a Weather API pulls live temperature, feels-like, humidity, rain probability, UV index, and wind. An algorithmic scoring layer pre-filters and ranks items. Claude then reasons over that shortlist and returns two outfit options per category — with a plain-English explanation for each pick.
+**Daily Outfit Recommendation** — A two-stage engine: algorithmic pre-filter narrows candidates by occasion match and weekly wear counts, then Claude reasons over the shortlist and returns a complete outfit with a plain-English explanation. Recommendations are cached per day and occasion so the app is instant on revisit.
 
-**Wear Logging & Insights** — Users confirm what they're actually wearing each day (or pick from their wardrobe directly). This prevents repeat recommendations and feeds into weekly and monthly utilization reports, surfacing items that rarely get worn.
+**Occasion-Based Context** — Choose from Casual, Work, Gym, or Party. For gym, athletic-tagged items are always prioritised regardless of weather — the user is exercising indoors. Cold/rain commute suggestions appear in accessories instead.
 
-**Activity & Mood Context** — Tell the app what you're doing — gym, office, outdoor brunch, rest day — and adjust for how you want to feel (confident, relaxed, energized). Recommendations shift accordingly across formality, breathability, and style tone.
+**Outfit Slots** — Every recommendation fills: `top_inner` (mandatory base layer), `bottom` (mandatory), `footwear` (mandatory), `top_outer` (optional — only when cold, rainy, or occasion calls for it), and `optional` accessories.
 
-**Health-Aware Nudges** — High UV days surface long-sleeve suggestions with a brief callout. Wind chill and afternoon temperature drops trigger layering warnings. Physical activities prioritize moisture-wicking fabrics from your actual wardrobe.
+**Readiness Score** — A 0–100 score computed server-side from slot coverage, warmth match vs feels-like temperature, rain readiness, and breathability in heat.
+
+**Wear Logging & History** — Log what you're wearing each day. Logs are merged per date so logging a second occasion appends to the same day entry. Outfit history is visible in the Profile page for the last 30 days. Per-item deletion recomputes wear counts correctly.
+
+**Wardrobe Insights** — Weekly and monthly utilization reports showing how often each item has been worn, surfacing items that rarely get used.
+
+**Health Nudges** — High UV, rain probability, temperature drops, AQI, and pollen levels generate contextual callouts alongside the outfit.
+
+**Demo Mode** — A "Try Demo" button on the welcome screen logs into a pre-seeded demo account. All write operations are blocked in demo mode so the demo data stays intact. A banner is shown on every page while in demo mode.
 
 ---
 
-## Custom-Built Logic
+## Wear Frequency Logic
 
-- **Outfit Ranking Engine** — Claude reasons over your wardrobe against live weather data, not generic rules
-- **Daily Readiness Score** — 5-axis breakdown across Comfort, Activity Match, Weather Risk, Outfit Suitability, and Sustainability
-- **Sustainability Scoring** — Per-item eco score inferred from material type via Claude Vision
-- **Preference Learning Loop** — User feedback stored and injected into future Claude prompts
-- **Outfit Repetition Tracking** — `wornCount` per item in Firestore prevents stale recommendations
-- **Weather-Adaptive UI** — Canvas animations and gradient themes driven by live weather codes and temperature
+Items are excluded from recommendations based on how many times they've been worn in the last 7 days:
+
+| Item type | Excluded after |
+|---|---|
+| `top_inner` / `bottom` | 2 wears this week |
+| `top_outer` | 5 wears this week |
+| `footwear` | Never excluded |
+| `accessory` | Never excluded |
+
+For gym activity, inner tops and bottoms skip the wear limit entirely — athletic wear is meant to repeat.
+
+If filtering leaves fewer than 3 candidates in a slot, the filter is dropped and all items are passed to the LLM so there's always something to work with.
 
 ---
 
@@ -33,14 +47,23 @@ A weather-aware outfit recommendation app that learns your wardrobe and suggests
 
 | Layer | Technology |
 |---|---|
-| Vision + Reasoning | Claude (Anthropic) |
-| Weather Data | Real-time Weather API from open-meteo |
-| Pre-filter Engine and filtering | Custom algorithmic scoring layer and LLM filter|
-| Database | Firebase / Firestore |
-| Backend | Node.js |
+| Vision + Reasoning | Claude Sonnet (Anthropic) |
+| Weather & Air Quality | Open-Meteo (free, no API key) |
+| Geocoding | Nominatim / OpenStreetMap |
+| Pre-filter Engine | Custom algorithmic layer (Node.js) |
+| Database / Auth / Storage | Supabase (PostgreSQL + RLS + Storage) |
+| Backend | Node.js + Express |
+| Frontend | React + Vite + Tailwind CSS |
+| Hosting | Vercel (frontend) + Render (backend) |
 
 ---
 
-## Demo Flow
+## Date & Timezone Handling
 
-Three moments that sell the idea: scanning a clothing item and watching it get tagged instantly → receiving a recommendation with a clear, reasoned explanation → seeing the weekly outfit planner laid out against the forecast.
+All dates use the user's location timezone derived from Open-Meteo's `current.time` field (already expressed in local time) and the `timezone` field. Device UTC is never used for date comparisons. This ensures "Today" and "Yesterday" labels, wear log dates, and recommendation cache keys are always correct for the user's actual location.
+
+---
+
+## Demo Flow (Upcoming)
+
+Click "Try Demo" on the welcome screen → loads a pre-seeded wardrobe with items across all categories → get a real outfit recommendation for your current weather → explore history and insights → click "Exit Demo" to return to the welcome screen.
