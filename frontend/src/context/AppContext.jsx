@@ -71,7 +71,7 @@ export function AppProvider({ children }) {
       setLocationName(name);
     } catch (_err) {
       // // 🔥 VERY HOT
-      // const [fallbackLat, fallbackLon] = [-23.79844, 117.260189];
+      const [fallbackLat, fallbackLon] = [17.039658, 9.443814];
 
       // // ☀️ HOT & SUNNY
       // const [fallbackLat, fallbackLon] = [25.2048, 55.2708];
@@ -83,10 +83,10 @@ export function AppProvider({ children }) {
       // const [fallbackLat, fallbackLon] = [64.1466, -21.9426];
 
       // // ❄️ SNOWY
-      // const [fallbackLat, fallbackLon] = [38.651935, -80.235694];
+      // const [fallbackLat, fallbackLon] = [50.340014, -100.449692];
 
       // 🌧️ RAINY
-      const [fallbackLat, fallbackLon] = [-36.10102,143.249513];
+      // const [fallbackLat, fallbackLon] = [37.401094, 127.91414];
 
       // // ⛈️ THUNDERSTORM
       // const [fallbackLat, fallbackLon] = [25.7617, -80.1918];

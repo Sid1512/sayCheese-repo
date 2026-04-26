@@ -27,10 +27,15 @@ async function request(path, options = {}) {
 
   // Token expired — clear session and redirect
   if (res.status === 401) {
-    localStorage.removeItem("dayadapt_token");
-    localStorage.removeItem("dayadapt_user");
-    window.location.href = "/onboarding";
-    return;
+    const token = getToken();
+    if (token) {
+      // Only redirect if they had a token that expired
+      localStorage.removeItem("dayadapt_token");
+      localStorage.removeItem("dayadapt_user");
+      window.location.href = "/onboarding";
+      return;
+    }
+    // If no token, just throw the error so the login form can show it
   }
 
   if (!res.ok) {
@@ -44,8 +49,8 @@ async function request(path, options = {}) {
 }
 
 export const api = {
-  get:    (path)        => request(path),
-  post:   (path, body)  => request(path, { method: "POST",   body: body instanceof FormData ? body : JSON.stringify(body) }),
-  patch:  (path, body)  => request(path, { method: "PATCH",  body: JSON.stringify(body) }),
-  delete: (path)        => request(path, { method: "DELETE" }),
+  get: (path) => request(path),
+  post: (path, body) => request(path, { method: "POST", body: body instanceof FormData ? body : JSON.stringify(body) }),
+  patch: (path, body) => request(path, { method: "PATCH", body: JSON.stringify(body) }),
+  delete: (path) => request(path, { method: "DELETE" }),
 };
